@@ -1,5 +1,5 @@
 using System.Text.Json;
-using DoodleCapture.App.Services;
+using Revie.App.Services;
 using Xunit;
 
 namespace Revie.Tests;

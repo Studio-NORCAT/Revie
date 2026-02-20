@@ -1,5 +1,5 @@
-using DoodleCapture.App.Models;
-using DoodleCapture.App.ViewModels;
+using Revie.App.Models;
+using Revie.App.ViewModels;
 using Xunit;
 
 namespace Revie.Tests;

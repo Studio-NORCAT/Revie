@@ -4,15 +4,17 @@ Revie is a Windows 10/11 tray-first desktop app built with **C# / .NET 8 LTS / W
 
 It provides:
 - Transparent always-on-top drawing overlay.
+- Responsive drawing toolbar that clamps/wraps for different resolutions and multi-monitor desktops.
 - Global hotkeys for draw toggle, clear, screenshot, open window, and start/stop video.
 - Screenshot capture with doodles composited into PNG.
 - Video segment capture to MP4 (with microphone audio when available).
 - Dark-mode browser for captures, sessions, notes, project and user tagging/filtering.
+- Session-aware storage routing: captures made during an active review session are staged under `Sessions\.active\...` and saved only into the final session package.
 
 ## Solution Layout
 
-- `DoodleCapture.sln`
-- `DoodleCapture.App/`
+- `Revie.sln`
+- `Revie.App/`
   - `App.xaml.cs`: tray lifecycle, hotkeys, capture/session orchestration
   - `Views/OverlayWindow.xaml`: drawing overlay window
   - `MainWindow.xaml` + `ViewModels/MainViewModel.cs`: main capture browser
@@ -43,7 +45,7 @@ It provides:
 
 1. Publish:
    ```powershell
-   dotnet publish .\DoodleCapture.App\DoodleCapture.App.csproj -c Release -r win-x64 --self-contained true -o .\dist\publish\installer-win-x64
+   dotnet publish .\Revie.App\Revie.App.csproj -c Release -r win-x64 --self-contained true -o .\dist\publish\installer-win-x64
    ```
 2. Start the app:
    ```powershell
@@ -55,17 +57,17 @@ It provides:
 1. Open PowerShell at repo root.
 2. Restore/build:
    ```powershell
-   dotnet build .\DoodleCapture.sln -c Release
+   dotnet build .\Revie.sln -c Release
    ```
 3. Run:
    ```powershell
-   dotnet run --project .\DoodleCapture.App\DoodleCapture.App.csproj -c Release
+   dotnet run --project .\Revie.App\Revie.App.csproj -c Release
    ```
 
 ## Test
 
 ```powershell
-dotnet test .\DoodleCapture.sln -c Release --no-build
+dotnet test .\Revie.sln -c Release --no-build
 ```
 
 ## Package Installer (WiX)
@@ -152,12 +154,22 @@ Files:
 - Start session in main UI or tray.
 - Save session to package current captures under:
   - `<StorageRoot>\Sessions\<timestamp_sessionName>\`
+- Session captures are not duplicated into the normal project capture bucket.
 - Session browser supports:
   - list/open/delete sessions
   - filter by project and user
   - open captures, edit notes/tags
 - linked note/user updates back to source capture metadata
 - right-click state tagging per capture (`In Review` / `Completed`) with status dots
+- malformed `session.json`/capture metadata is skipped or downgraded to safe fallback summaries so one bad session does not block opening the browser
+- new-session indicators:
+  - main toolbar `Open Sessions` button shows unread session count badge
+  - each session card shows `N new` when it has captures not yet opened in the session browser
+
+## Recent Capture Cleanup
+
+- `Purge Recent` button removes all items from the main recent-captures bucket.
+- This does not delete packaged session archives under `<StorageRoot>\Sessions\...`.
 
 ## Multi-User Tagging
 

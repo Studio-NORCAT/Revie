@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DoodleCapture.App\DoodleCapture.App.csproj" />
+    <ProjectReference Include="..\Revie.App\Revie.App.csproj" />
   </ItemGroup>
 
 </Project>

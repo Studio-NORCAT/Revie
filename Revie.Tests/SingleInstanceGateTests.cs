@@ -1,4 +1,4 @@
-using DoodleCapture.App.Services;
+using Revie.App.Services;
 
 namespace Revie.Tests;
 

@@ -1,6 +1,6 @@
 using System.Text.Json;
-using DoodleCapture.App.Models;
-using DoodleCapture.App.Services;
+using Revie.App.Models;
+using Revie.App.Services;
 using Xunit;
 
 namespace Revie.Tests;

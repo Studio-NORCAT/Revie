@@ -1,5 +1,5 @@
 using System.Reflection;
-using DoodleCapture.App.Services;
+using Revie.App.Services;
 using Xunit;
 
 namespace Revie.Tests;
