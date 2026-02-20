@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Revie</AssemblyName>
+    <Product>Revie</Product>
+    <Title>Revie</Title>
+    <ApplicationIcon>Assets\revie.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.3</Version>
+    <InformationalVersion>1.0.3+build.$([System.DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss"))</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\revie.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="ThirdParty\ffmpeg\win-x64\ffmpeg.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      <TargetPath>ffmpeg.exe</TargetPath>
+    </None>
+    <None Include="ThirdParty\ffmpeg\win-x64\ffprobe.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      <TargetPath>ffprobe.exe</TargetPath>
+    </None>
+    <None Include="ThirdParty\ffmpeg\win-x64\FFMPEG_LICENSE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      <TargetPath>FFMPEG_LICENSE.txt</TargetPath>
+    </None>
+  </ItemGroup>
+
+</Project>

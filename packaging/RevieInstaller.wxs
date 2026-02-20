@@ -1,0 +1,45 @@
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Revie"
+           Manufacturer="Revie"
+           Version="1.0.3"
+           UpgradeCode="{B9B97563-B34F-4D54-B93E-9C74551D7E55}"
+           Language="1033"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Revie is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Revie" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuDir" Name="Revie" />
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Revie" Level="1">
+      <ComponentGroupRef Id="RevieAppFiles" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="RevieAppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.SourceDir)\\**" />
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcutComponent" Directory="ProgramMenuDir" Guid="*">
+      <Shortcut Id="RevieStartMenuShortcut"
+                Name="Revie"
+                Description="Revie"
+                Target="[INSTALLFOLDER]Revie.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
+      <RegistryValue Root="HKLM"
+                     Key="Software\\Revie"
+                     Name="Installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

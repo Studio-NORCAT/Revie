@@ -1,0 +1,61 @@
+<Window x:Class="DoodleCapture.App.Views.CaptureToastWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="360"
+        Height="92"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        IsHitTestVisible="False"
+        SnapsToDevicePixels="True">
+    <Border x:Name="ToastRoot"
+            Margin="0"
+            Padding="12"
+            CornerRadius="10"
+            Background="#E61A1A1A"
+            BorderBrush="#4A4A4A"
+            BorderThickness="1"
+            Opacity="0">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="34" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Width="34"
+                    Height="34"
+                    CornerRadius="17"
+                    Background="#242424"
+                    BorderBrush="#4C4C4C"
+                    BorderThickness="1"
+                    VerticalAlignment="Center">
+                <TextBlock HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="15"
+                           Foreground="#F6D468"
+                           Text="&#xE722;" />
+            </Border>
+
+            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                <TextBlock Text="Revie captured the screen"
+                           Foreground="#F2F2F2"
+                           FontSize="13"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="DetailTextBlock"
+                           Margin="0,3,0,0"
+                           Foreground="#C9C9C9"
+                           FontSize="12"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="NoWrap"
+                           Text="Saved successfully" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

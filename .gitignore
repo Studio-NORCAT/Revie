@@ -1,0 +1,43 @@
+# Revie (.NET / WPF / Windows)
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+[Aa]rtifacts/
+[Dd]ist/
+.tmp/
+.wix/
+TestResults/
+
+# Visual Studio / IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.rsuser
+*.sln.docstates
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Test / coverage artifacts
+*.coverage
+*.coveragexml
+coverage/
+coverage.*
+
+# OS-generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
