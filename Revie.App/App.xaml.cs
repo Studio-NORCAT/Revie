@@ -73,6 +73,9 @@ public partial class App : System.Windows.Application
             await _settingsService.SaveAsync(_settings);
         }
 
+        CleanupStaleSessionStagingDirectories();
+        CleanupLegacySessionActiveRootIfEmpty();
+
         InitializeOverlay();
         InitializeMainWindow();
         InitializeHotkeys();
@@ -496,6 +499,7 @@ public partial class App : System.Windows.Application
             _sessionCaptures.Clear();
             UpdateSessionState();
             RefreshSessionNotifications();
+            CleanupLegacySessionActiveRootIfEmpty();
 
             _mainViewModel?.SetStatus($"Session saved to {savedFolder}");
             AppLogService.Info("Session.Save", "Session saved.", new
@@ -591,6 +595,7 @@ public partial class App : System.Windows.Application
         _sessionCaptures.Clear();
         UpdateSessionState();
         RefreshSessionNotifications();
+        CleanupLegacySessionActiveRootIfEmpty();
 
         if (failed > 0)
         {
@@ -838,9 +843,7 @@ public partial class App : System.Windows.Application
     private string BuildActiveSessionCaptureBaseRoot(DateTime startedAtLocal)
     {
         var activeRoot = Path.Combine(
-            _settings.StorageRoot,
-            "Sessions",
-            ".active",
+            GetSessionStagingRoot(),
             $"{startedAtLocal:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}",
             "captures");
         Directory.CreateDirectory(activeRoot);
@@ -891,6 +894,102 @@ public partial class App : System.Windows.Application
         catch
         {
             // Best effort cleanup for active session staging root.
+        }
+    }
+
+    private void CleanupLegacySessionActiveRootIfEmpty()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.StorageRoot))
+        {
+            return;
+        }
+
+        try
+        {
+            var legacyRoot = Path.Combine(_settings.StorageRoot, "Sessions", ".active");
+            TryDeleteDirectoryTreeIfEmpty(legacyRoot);
+        }
+        catch
+        {
+            // Best effort cleanup for legacy storage-root session staging.
+        }
+    }
+
+    private static void CleanupStaleSessionStagingDirectories()
+    {
+        try
+        {
+            var stagingRoot = GetSessionStagingRoot();
+            if (!Directory.Exists(stagingRoot))
+            {
+                return;
+            }
+
+            var staleThresholdUtc = DateTime.UtcNow.AddDays(-2);
+            foreach (var directory in Directory.EnumerateDirectories(stagingRoot))
+            {
+                try
+                {
+                    var lastWriteUtc = Directory.GetLastWriteTimeUtc(directory);
+                    if (lastWriteUtc < staleThresholdUtc)
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // Best effort stale cleanup only.
+                }
+            }
+
+            TryDeleteDirectoryTreeIfEmpty(stagingRoot);
+        }
+        catch
+        {
+            // Best effort stale cleanup only.
+        }
+    }
+
+    private static string GetSessionStagingRoot()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Revie",
+            "session-staging");
+    }
+
+    private static bool TryDeleteDirectoryTreeIfEmpty(string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            foreach (var childDirectory in Directory.EnumerateDirectories(directoryPath))
+            {
+                if (!TryDeleteDirectoryTreeIfEmpty(childDirectory))
+                {
+                    return false;
+                }
+            }
+
+            if (Directory.EnumerateFiles(directoryPath).Any())
+            {
+                return false;
+            }
+
+            if (!Directory.EnumerateDirectories(directoryPath).Any())
+            {
+                Directory.Delete(directoryPath, recursive: false);
+            }
+
+            return !Directory.Exists(directoryPath);
+        }
+        catch
+        {
+            return false;
         }
     }
 

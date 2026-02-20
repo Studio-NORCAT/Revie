@@ -6,10 +6,12 @@
         Icon="/Assets/revie.ico"
         Width="1360"
         Height="860"
-        MinWidth="1140"
-        MinHeight="700"
+        MinWidth="920"
+        MinHeight="620"
         Background="#0C0C0C"
         Foreground="#EAEAEA"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
@@ -381,7 +383,10 @@
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="10">
-            <DockPanel LastChildFill="False">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          CanContentScroll="False">
+                <DockPanel LastChildFill="False">
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Width="88" Content="Back" Click="BackButton_OnClick" IsEnabled="{Binding IsInCaptureMode}" />
                     <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" FontSize="21" FontWeight="SemiBold" Foreground="#FFFFFF" Text="{Binding HeaderTitle}" />
@@ -391,12 +396,13 @@
                     <Button Width="124" Margin="0,0,8,0" Content="{Binding OpenButtonText}" Click="OpenButton_OnClick" IsEnabled="{Binding CanOpen}" />
                     <Button Width="100" Content="Refresh" Click="RefreshButton_OnClick" />
                 </StackPanel>
-            </DockPanel>
+                </DockPanel>
+            </ScrollViewer>
         </Border>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SessionLeftColumn" Width="410" />
+                <ColumnDefinition x:Name="SessionLeftColumn" Width="0.95*" />
                 <ColumnDefinition x:Name="SessionSpacerColumn" Width="12" />
                 <ColumnDefinition x:Name="SessionRightColumn" Width="*" />
             </Grid.ColumnDefinitions>
@@ -980,26 +986,26 @@
                                     Visibility="{Binding IsCaptureDetailsVisible, Converter={StaticResource BoolToVisibility}}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="260" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="12" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
 
-                                    <StackPanel Grid.Column="0">
+                                    <StackPanel Grid.Column="0" MaxWidth="380">
                                         <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}" Text="Captured At" />
                                         <TextBlock Margin="0,3,0,10" Foreground="#C8C8C8" Text="{Binding SelectedCapture.FullTimestampLabel}" />
 
                                         <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}" Text="Window" />
                                         <TextBlock Margin="0,3,0,0"
                                                    Foreground="#D7D7D7"
-                                                   TextWrapping="Wrap"
+                                                   TextWrapping="WrapWithOverflow"
                                                    Text="{Binding SelectedCapture.ActiveWindowTitle}" />
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="2">
                                         <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}" Text="User" />
                                         <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
-                                            <ComboBox Width="190"
+                                            <ComboBox Width="160"
                                                       Margin="0,0,8,0"
                                                       ItemsSource="{Binding SessionUserChoices}"
                                                       SelectedItem="{Binding SelectedCaptureUserChoice, Mode=TwoWay}" />
@@ -1064,7 +1070,10 @@
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
-            <DockPanel LastChildFill="False">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          CanContentScroll="False">
+                <DockPanel LastChildFill="False">
                 <TextBlock DockPanel.Dock="Left" Foreground="{StaticResource MutedBrush}" Text="{Binding StatusText}" />
                 <Border DockPanel.Dock="Right"
                         Padding="10,6"
@@ -1082,27 +1091,26 @@
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="90" />
-                            <ColumnDefinition Width="8" />
-                            <ColumnDefinition Width="180" />
-                            <ColumnDefinition Width="14" />
-                            <ColumnDefinition Width="70" />
-                            <ColumnDefinition Width="8" />
-                            <ColumnDefinition Width="180" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" Text="Project" />
-                        <ComboBox Grid.Column="2"
+                    <WrapPanel VerticalAlignment="Center">
+                        <TextBlock Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   Text="Project" />
+                        <ComboBox Width="170"
+                                  Margin="0,0,12,0"
                                   ItemsSource="{Binding SessionProjectFilterChoices}"
                                   SelectedItem="{Binding SelectedSessionProjectFilter, Mode=TwoWay}" />
-                        <TextBlock Grid.Column="4" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" Text="User" />
-                        <ComboBox Grid.Column="6"
+                        <TextBlock Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   Text="User" />
+                        <ComboBox Width="170"
                                   ItemsSource="{Binding SessionUserFilterChoices}"
                                   SelectedItem="{Binding SelectedSessionUserFilter, Mode=TwoWay}" />
-                    </Grid>
+                    </WrapPanel>
                 </Border>
-            </DockPanel>
+                </DockPanel>
+            </ScrollViewer>
         </Border>
 
         <Border Grid.Row="0"

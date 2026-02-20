@@ -9,7 +9,6 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using Revie.App.Models;
 using Revie.App.Native;
-using Forms = System.Windows.Forms;
 
 namespace Revie.App.Views;
 
@@ -93,7 +92,7 @@ public partial class OverlayWindow : Window
 
         if (enabled)
         {
-            Dispatcher.BeginInvoke(new Action(PositionToolbarNearCursor));
+            Dispatcher.BeginInvoke(new Action(PositionToolbarAtTopLeft));
             Topmost = false;
             Topmost = true;
             Activate();
@@ -201,7 +200,7 @@ public partial class OverlayWindow : Window
             ApplyVirtualScreenBounds();
             if (_isDrawingMode)
             {
-                PositionToolbarNearCursor();
+                PositionToolbarAtTopLeft();
             }
         }));
     }
@@ -248,21 +247,30 @@ public partial class OverlayWindow : Window
 
     private void ApplyToolbarVisibility()
     {
-        ToolbarRoot.Visibility = _isDrawingMode && !_suppressToolbar ? Visibility.Visible : Visibility.Collapsed;
+        var shouldShowToolbar = _isDrawingMode && !_suppressToolbar;
+        ToolbarRoot.Visibility = shouldShowToolbar ? Visibility.Visible : Visibility.Collapsed;
         UpdateToolbarConstraints();
+
+        if (shouldShowToolbar)
+        {
+            PositionToolbarAtTopLeft();
+            return;
+        }
+
         EnsureToolbarWithinBounds();
     }
 
-    private void PositionToolbarNearCursor()
+    private void PositionToolbarAtTopLeft()
     {
         if (!_isDrawingMode || ToolbarRoot.Visibility != Visibility.Visible)
         {
             return;
         }
 
-        var cursor = Forms.Cursor.Position;
-        var cursorDip = PointFromScreen(new System.Windows.Point(cursor.X, cursor.Y));
-        SetToolbarPosition(cursorDip.X + 16, cursorDip.Y + 16);
+        var primaryBounds = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea
+            ?? System.Windows.Forms.SystemInformation.VirtualScreen;
+        var primaryTopLeftDip = PointFromScreen(new System.Windows.Point(primaryBounds.Left, primaryBounds.Top));
+        SetToolbarPosition(primaryTopLeftDip.X + ToolbarInset, primaryTopLeftDip.Y + ToolbarInset);
     }
 
     private void UpdateToolbarConstraints()

@@ -28,6 +28,8 @@ public sealed class MainViewModel : ObservableObject
 
     private readonly CaptureIndexService _captureIndexService;
     private readonly Func<string> _storageRootProvider;
+    private readonly HashSet<string> _configuredProjects = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _configuredUsers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownUsers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -423,12 +425,10 @@ public sealed class MainViewModel : ObservableObject
     {
         var activeChoice = ToProjectChoice(activeProject);
         var activeUserChoice = ToUserChoice(activeUser);
+        UpdateConfiguredTaxonomy(projects, activeProject, users, activeUser);
         _knownProjects.Clear();
         _knownUsers.Clear();
-        AddProjects(projects);
-        AddProject(CaptureService.NormalizeProject(activeProject));
-        AddUsers(users);
-        AddUser(CaptureService.NormalizeUser(activeUser));
+        SeedKnownTaxonomyFromConfigured();
         AddProjects(Captures.Select(capture => capture.Project));
         AddUsers(Captures.SelectMany(capture => capture.AssignedUsers));
         _suppressActiveProjectNotifications = true;
@@ -471,6 +471,7 @@ public sealed class MainViewModel : ObservableObject
             Captures.Clear();
             _knownProjects.Clear();
             _knownUsers.Clear();
+            SeedKnownTaxonomyFromConfigured();
 
             var skipped = 0;
             var loaded = 0;
@@ -1321,6 +1322,54 @@ public sealed class MainViewModel : ObservableObject
         }
 
         _knownUsers.Add(normalized);
+    }
+
+    private void UpdateConfiguredTaxonomy(IEnumerable<string> projects, string activeProject, IEnumerable<string> users, string activeUser)
+    {
+        _configuredProjects.Clear();
+        _configuredUsers.Clear();
+        foreach (var project in projects ?? Array.Empty<string>())
+        {
+            var normalized = CaptureService.NormalizeProject(project);
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                _configuredProjects.Add(normalized);
+            }
+        }
+
+        foreach (var user in users ?? Array.Empty<string>())
+        {
+            var normalized = CaptureService.NormalizeUser(user);
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                _configuredUsers.Add(normalized);
+            }
+        }
+
+        var normalizedActiveProject = CaptureService.NormalizeProject(activeProject);
+        var normalizedActiveUser = CaptureService.NormalizeUser(activeUser);
+        if (!string.IsNullOrWhiteSpace(normalizedActiveProject))
+        {
+            _configuredProjects.Add(normalizedActiveProject);
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedActiveUser))
+        {
+            _configuredUsers.Add(normalizedActiveUser);
+        }
+    }
+
+    private void SeedKnownTaxonomyFromConfigured()
+    {
+        foreach (var project in _configuredProjects)
+        {
+            _knownProjects.Add(project);
+        }
+
+        foreach (var user in _configuredUsers)
+        {
+            _knownUsers.Add(user);
+        }
     }
 
     private void RebuildProjectCollections()

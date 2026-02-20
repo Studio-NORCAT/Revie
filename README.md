@@ -9,7 +9,7 @@ It provides:
 - Screenshot capture with doodles composited into PNG.
 - Video segment capture to MP4 (with microphone audio when available).
 - Dark-mode browser for captures, sessions, notes, project and user tagging/filtering.
-- Session-aware storage routing: captures made during an active review session are staged under `Sessions\.active\...` and saved only into the final session package.
+- Session-aware storage routing: captures made during an active review session are staged under `%LocalAppData%\Revie\session-staging\...` and saved only into the final session package.
 
 ## Solution Layout
 
@@ -100,7 +100,7 @@ On first launch, Settings opens.
   - `<StorageRoot>\Revie\taxonomy.json`
   - This lets other machines using the same storage root load the same project/user lists.
 - Settings now shows the running app build version in the top-right.
-  - Build revision is stamped automatically at compile time (`1.0.3+build.yyyyMMdd-HHmmss`).
+  - Build revision is stamped automatically at compile time (`1.0.4+build.yyyyMMdd-HHmmss`).
 
 ## Hotkeys (Default)
 

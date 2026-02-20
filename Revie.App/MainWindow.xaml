@@ -8,10 +8,12 @@
         Icon="/Assets/revie.ico"
         Width="1460"
         Height="920"
-        MinWidth="1200"
-        MinHeight="780"
+        MinWidth="960"
+        MinHeight="620"
         Background="#0A0A0A"
         Foreground="#E6E6E6"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
@@ -459,7 +461,7 @@
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="MainPreviewColumn" Width="*" />
             <ColumnDefinition x:Name="MainSplitterColumn" Width="12" />
-            <ColumnDefinition x:Name="MainSidebarColumn" Width="390" />
+            <ColumnDefinition x:Name="MainSidebarColumn" Width="360" />
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition x:Name="MainContentRow" Height="*" />
@@ -477,44 +479,86 @@
                 </Grid.RowDefinitions>
 
                 <DockPanel Grid.Row="0">
-                    <Border
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False">
+                        <Border
                             Padding="8"
                             CornerRadius="10"
                             Background="#141414"
                             BorderBrush="#2F2F2F"
                             BorderThickness="1">
-                        <DockPanel LastChildFill="False">
-                        <ToggleButton x:Name="SearchToggleButton"
-                                      DockPanel.Dock="Left"
-                                      Style="{StaticResource ToolbarActionToggleButtonStyle}"
-                                      Margin="0,0,10,0"
-                                      ToolTip="Search">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE721;" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Search" />
-                            </Grid>
-                        </ToggleButton>
-                        <ToggleButton Style="{StaticResource ToolbarActionToggleButtonStyle}"
-                                      DockPanel.Dock="Right"
-                                      IsChecked="{Binding IsNotesVisible, Mode=TwoWay}"
-                                      ToolTip="Notes">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE70B;" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Notes" />
-                            </Grid>
-                        </ToggleButton>
-                        </DockPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <ToggleButton x:Name="SearchToggleButton"
+                                              Style="{StaticResource ToolbarActionToggleButtonStyle}"
+                                              Margin="0,0,10,0"
+                                              ToolTip="Search">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE721;" />
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Search" />
+                                    </Grid>
+                                </ToggleButton>
+                                <ToggleButton Style="{StaticResource ToolbarActionToggleButtonStyle}"
+                                              IsChecked="{Binding IsNotesVisible, Mode=TwoWay}"
+                                              ToolTip="Notes">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE70B;" />
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Notes" />
+                                    </Grid>
+                                </ToggleButton>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <Button Style="{StaticResource ToolbarActionButtonStyle}"
+                                        Margin="0,0,10,0"
+                                        MinWidth="122"
+                                        Command="{Binding StartVideoCommand}"
+                                        ToolTip="Start a video segment">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE7C8;" />
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Start Video" />
+                                    </Grid>
+                                </Button>
+                                <Button Style="{StaticResource ToolbarActionButtonStyle}"
+                                        MinWidth="114"
+                                        Command="{Binding StopVideoCommand}"
+                                        ToolTip="Stop current video segment">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE71A;" />
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Stop Video" />
+                                    </Grid>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
                     </Border>
+                    </ScrollViewer>
                 </DockPanel>
 
                 <Border Grid.Row="1" Margin="0,10,0,10" Padding="10,6" Background="#191919" CornerRadius="8" BorderBrush="#333333" BorderThickness="1">
@@ -761,32 +805,32 @@
                         Visibility="{Binding IsNotesVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="230" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="12" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
+                        <StackPanel Grid.Column="0" MaxWidth="420">
                             <TextBlock Style="{StaticResource LabelStyle}" Text="Window Title" />
-                            <TextBlock Margin="0,0,0,10" Text="{Binding SelectedCapture.ActiveWindowTitle}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,0,0,10" Text="{Binding SelectedCapture.ActiveWindowTitle}" TextWrapping="WrapWithOverflow" />
 
                             <TextBlock Style="{StaticResource LabelStyle}" Text="Process" />
                             <TextBlock Margin="0,0,0,10" Text="{Binding SelectedCapture.ActiveProcessName}" />
 
                             <TextBlock Style="{StaticResource LabelStyle}" Text="Capture Path" />
-                            <TextBlock Text="{Binding SelectedCapture.CaptureDirectory}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SelectedCapture.CaptureDirectory}" TextWrapping="WrapWithOverflow" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="2">
                             <Grid Margin="0,0,0,10">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="14" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0">
+                                <StackPanel Grid.Column="0" MinWidth="252" MaxWidth="292">
                                     <TextBlock Style="{StaticResource LabelStyle}" Text="Add User Tag" />
                                     <StackPanel Orientation="Horizontal">
-                                        <ComboBox Width="190"
+                                        <ComboBox Width="160"
                                                   Margin="0,0,8,0"
                                                   ItemsSource="{Binding UserChoices}"
                                                   SelectedItem="{Binding SelectedUserChoice, Mode=TwoWay}" />
@@ -806,7 +850,7 @@
 
                             <TextBlock Style="{StaticResource LabelStyle}" Text="Project" />
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <ComboBox Width="200"
+                                <ComboBox Width="170"
                                           Margin="0,0,8,0"
                                           ItemsSource="{Binding ProjectChoices}"
                                           SelectedItem="{Binding SelectedProjectChoice, Mode=TwoWay}" />
@@ -938,6 +982,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <DockPanel Grid.Row="0" Margin="0,0,0,10">
@@ -1083,12 +1128,33 @@
                         </StackPanel>
                     </Border>
                 </Grid>
+
+                <Button Grid.Row="3"
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        Margin="0,10,0,0"
+                        MinHeight="34"
+                        Padding="12,7"
+                        Command="{Binding PurgeRecentCapturesCommand}"
+                        ToolTip="Delete all recent captures from the main list (sessions remain intact)">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE74D;" />
+                        <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Purge Recent" />
+                    </Grid>
+                </Button>
             </Grid>
         </Border>
 
         <Border x:Name="MainStatusBorder"
                 Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Background="#151515" CornerRadius="8" Padding="10,8">
-            <DockPanel>
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          CanContentScroll="False">
+                <DockPanel>
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource PrimaryButtonStyle}"
                             MinWidth="112"
@@ -1113,7 +1179,7 @@
                             BorderThickness="1"
                             CornerRadius="8"
                             Padding="10,6"
-                            MinWidth="252">
+                            MinWidth="220">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -1125,7 +1191,7 @@
                                        FontSize="12"
                                        Text="Current Project" />
                             <ComboBox Grid.Column="2"
-                                      MinWidth="160"
+                                      MinWidth="130"
                                       ItemsSource="{Binding ActiveCaptureProjectChoices}"
                                       SelectedItem="{Binding ActiveCaptureProjectChoice, Mode=TwoWay}" />
                         </Grid>
@@ -1137,7 +1203,7 @@
                             BorderThickness="1"
                             CornerRadius="8"
                             Padding="10,6"
-                            MinWidth="252"
+                            MinWidth="220"
                             Visibility="Collapsed">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -1150,7 +1216,7 @@
                                        FontSize="12"
                                        Text="Current User" />
                             <ComboBox Grid.Column="2"
-                                      MinWidth="160"
+                                      MinWidth="130"
                                       ItemsSource="{Binding ActiveCaptureUserChoices}"
                                       SelectedItem="{Binding ActiveCaptureUserChoice, Mode=TwoWay}" />
                         </Grid>
@@ -1158,42 +1224,6 @@
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                    <Button Style="{StaticResource PrimaryButtonStyle}"
-                            MinWidth="122"
-                            MinHeight="34"
-                            Padding="12,7"
-                            Margin="0,0,10,0"
-                            Command="{Binding StartVideoCommand}"
-                            ToolTip="Start a video segment">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE7C8;" />
-                            <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Start Video" />
-                        </Grid>
-                    </Button>
-
-                    <Button Style="{StaticResource PrimaryButtonStyle}"
-                            MinWidth="114"
-                            MinHeight="34"
-                            Padding="12,7"
-                            Margin="0,0,10,0"
-                            Command="{Binding StopVideoCommand}"
-                            ToolTip="Stop current video segment">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE71A;" />
-                            <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Stop Video" />
-                        </Grid>
-                    </Button>
-
                     <Button Style="{StaticResource PrimaryButtonStyle}"
                             MinWidth="124"
                             MinHeight="34"
@@ -1227,24 +1257,6 @@
                                            Foreground="#FFF3F3"
                                            Text="{Binding UnviewedSessionsBadgeText}" />
                             </Border>
-                        </Grid>
-                    </Button>
-
-                    <Button Style="{StaticResource PrimaryButtonStyle}"
-                            MinWidth="146"
-                            MinHeight="34"
-                            Padding="12,7"
-                            Margin="0,0,10,0"
-                            Command="{Binding PurgeRecentCapturesCommand}"
-                            ToolTip="Delete all recent captures from the main list (sessions remain intact)">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE74D;" />
-                            <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Purge Recent" />
                         </Grid>
                     </Button>
 
@@ -1302,7 +1314,7 @@
                     </Button>
                 </StackPanel>
 
-                <StackPanel Orientation="Vertical" VerticalAlignment="Center" Margin="30,0,24,0" MinWidth="420">
+                <StackPanel Orientation="Vertical" VerticalAlignment="Center" Margin="30,0,24,0" MinWidth="260">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,2">
                         <Ellipse Style="{StaticResource RecordingDotStyle}" />
                         <TextBlock Foreground="#AFAFAF" Text="{Binding SessionSummary}" TextTrimming="CharacterEllipsis" />
@@ -1313,7 +1325,8 @@
                     </StackPanel>
                     <TextBlock Foreground="{StaticResource MutedBrush}" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
-            </DockPanel>
+                </DockPanel>
+            </ScrollViewer>
         </Border>
 
         <Border Grid.Row="0"

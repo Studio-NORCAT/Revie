@@ -8,10 +8,12 @@
         Icon="/Assets/revie.ico"
         Width="860"
         Height="700"
-        MinWidth="760"
-        MinHeight="620"
+        MinWidth="640"
+        MinHeight="520"
         Background="#101010"
         Foreground="#E8E8E8"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <SolidColorBrush x:Key="SurfaceBrush" Color="#151515" />
@@ -265,11 +267,15 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <TabPanel Grid.Row="0"
-                                      x:Name="HeaderPanel"
-                                      IsItemsHost="True"
-                                      Margin="0,0,0,-1"
-                                      Panel.ZIndex="2" />
+                            <ScrollViewer Grid.Row="0"
+                                          HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Disabled"
+                                          CanContentScroll="False">
+                                <TabPanel x:Name="HeaderPanel"
+                                          IsItemsHost="True"
+                                          Margin="0,0,0,-1"
+                                          Panel.ZIndex="2" />
+                            </ScrollViewer>
                             <Border Grid.Row="1"
                                     Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
@@ -295,7 +301,7 @@
             <Setter Property="BorderBrush" Value="#333333" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="18,10" />
-            <Setter Property="MinWidth" Value="146" />
+            <Setter Property="MinWidth" Value="112" />
             <Setter Property="MinHeight" Value="42" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Template">

@@ -53,8 +53,51 @@ public sealed class MainViewModelProjectSyncTests
         Assert.Equal("UserB", raisedUser);
     }
 
+    [StaFact]
+    public async Task RefreshWithNoCaptures_KeepsConfiguredProjectAndUserChoices()
+    {
+        using var temp = new TempDirectory();
+        var viewModel = new MainViewModel(new CaptureIndexService(), () => temp.Path);
+        viewModel.ApplyTaxonomySettings(new[] { "Alpha" }, "Alpha", new[] { "UserA" }, "UserA");
+
+        await viewModel.RefreshAsync();
+
+        Assert.Contains("Alpha", viewModel.ActiveCaptureProjectChoices);
+        Assert.Contains("Alpha", viewModel.FilterProjectChoices);
+        Assert.Contains("Alpha", viewModel.LatestProjectFilterChoices);
+        Assert.Contains("UserA", viewModel.ActiveCaptureUserChoices);
+        Assert.Contains("UserA", viewModel.FilterUserChoices);
+        Assert.Contains("UserA", viewModel.LatestUserFilterChoices);
+    }
+
     private static MainViewModel CreateViewModel()
     {
         return new MainViewModel(new CaptureIndexService(), () => @"C:\Temp\RevieTests");
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevieTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(Path))
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup for test temp paths.
+            }
+        }
     }
 }
