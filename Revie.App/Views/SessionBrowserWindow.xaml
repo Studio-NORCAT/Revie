@@ -16,6 +16,7 @@
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <infra:SafeImagePathConverter x:Key="SafeImagePathConverter" />
+        <infra:WidthOffsetConverter x:Key="WidthOffsetConverter" />
         <SolidColorBrush x:Key="SurfaceBrush" Color="#121212" />
         <SolidColorBrush x:Key="SurfaceAltBrush" Color="#181818" />
         <SolidColorBrush x:Key="ControlBrush" Color="#222222" />
@@ -250,6 +251,8 @@
         <Style x:Key="SessionListItemStyle" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="14" />
             <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Width"
+                    Value="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource WidthOffsetConverter}, ConverterParameter=22}" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -383,13 +386,20 @@
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="10">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Disabled"
                           CanContentScroll="False">
                 <DockPanel LastChildFill="False">
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Width="88" Content="Back" Click="BackButton_OnClick" IsEnabled="{Binding IsInCaptureMode}" />
-                    <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" FontSize="21" FontWeight="SemiBold" Foreground="#FFFFFF" Text="{Binding HeaderTitle}" />
+                    <TextBlock Margin="16,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="21"
+                               FontWeight="SemiBold"
+                               Foreground="#FFFFFF"
+                               Text="{Binding HeaderTitle}"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="700" />
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -402,9 +412,9 @@
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SessionLeftColumn" Width="0.95*" />
+                <ColumnDefinition x:Name="SessionLeftColumn" Width="0.7*" />
                 <ColumnDefinition x:Name="SessionSpacerColumn" Width="12" />
-                <ColumnDefinition x:Name="SessionRightColumn" Width="*" />
+                <ColumnDefinition x:Name="SessionRightColumn" Width="2.3*" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
@@ -456,13 +466,18 @@
                                  SelectedItem="{Binding SelectedSession, Mode=TwoWay}"
                                  PreviewMouseRightButtonDown="SessionListBox_OnPreviewMouseRightButtonDown"
                                  MouseDoubleClick="SessionListBox_OnMouseDoubleClick"
-                                 Padding="2,2,2,0"
+                                 Padding="2,2,0,0"
+                                 Margin="0"
+                                 ClipToBounds="True"
                                  BorderThickness="0"
                                  Background="Transparent"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Visible"
                                  ScrollViewer.CanContentScroll="True"
                                  VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.ScrollUnit="Pixel"
+                                 VirtualizingPanel.CacheLength="1"
+                                 VirtualizingPanel.CacheLengthUnit="Page"
                                  VirtualizingPanel.VirtualizationMode="Recycling"
                                  ItemContainerStyle="{StaticResource SessionListItemStyle}">
                             <ListBox.ContextMenu>
@@ -504,7 +519,7 @@
                                                 ClipToBounds="True">
                                             <Grid>
                                                 <Image Stretch="UniformToFill"
-                                                       Source="{Binding PreviewImagePath, Converter={StaticResource SafeImagePathConverter}}" />
+                                                       Source="{Binding PreviewImagePath, IsAsync=True}" />
                                                 <Border Background="#A00F0F0F">
                                                     <Border.Style>
                                                         <Style TargetType="Border">
@@ -533,10 +548,18 @@
                                                        TextTrimming="CharacterEllipsis" />
                                             <WrapPanel Margin="0,7,0,0">
                                                 <Border Style="{StaticResource MetadataChipStyle}">
-                                                    <TextBlock FontSize="11" Foreground="#CFCFCF" Text="{Binding ProjectDisplay}" />
+                                                    <TextBlock FontSize="11"
+                                                               Foreground="#CFCFCF"
+                                                               Text="{Binding ProjectDisplay}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               MaxWidth="130" />
                                                 </Border>
                                                 <Border Style="{StaticResource MetadataChipStyle}">
-                                                    <TextBlock FontSize="11" Foreground="#CFCFCF" Text="{Binding UserDisplay}" />
+                                                    <TextBlock FontSize="11"
+                                                               Foreground="#CFCFCF"
+                                                               Text="{Binding UserDisplay}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               MaxWidth="160" />
                                                 </Border>
                                                 <Border Style="{StaticResource MetadataChipStyle}">
                                                     <TextBlock FontSize="11" Foreground="#B8B8B8" Text="{Binding TimeLabel}" />
@@ -575,10 +598,18 @@
                                  ItemsSource="{Binding SessionCaptures}"
                                  SelectedItem="{Binding SelectedCapture, Mode=TwoWay}"
                                  PreviewMouseRightButtonDown="CaptureListBox_OnPreviewMouseRightButtonDown"
+                                 Padding="2,2,0,0"
+                                 Margin="0"
+                                 ClipToBounds="True"
                                  BorderThickness="0"
                                  Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                 ScrollViewer.VerticalScrollBarVisibility="Visible"
                                  ScrollViewer.CanContentScroll="True"
                                  VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.ScrollUnit="Pixel"
+                                 VirtualizingPanel.CacheLength="1"
+                                 VirtualizingPanel.CacheLengthUnit="Page"
                                  VirtualizingPanel.VirtualizationMode="Recycling"
                                  ItemContainerStyle="{StaticResource SessionListItemStyle}">
                             <ListBox.ContextMenu>
@@ -617,7 +648,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Width="84" Height="56" CornerRadius="5" ClipToBounds="True">
                                             <Grid>
-                                                <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                                <Image Source="{Binding Thumbnail, IsAsync=True}" Stretch="UniformToFill" />
                                                 <StackPanel Orientation="Horizontal"
                                                             HorizontalAlignment="Right"
                                                             VerticalAlignment="Bottom"
@@ -710,7 +741,10 @@
                                 Click="ToggleCaptureDetailsButton_OnClick" />
                         <StackPanel>
                             <TextBlock Style="{StaticResource PaneTitleStyle}" Text="{Binding RightPaneTitle}" />
-                            <TextBlock Margin="0,4,0,0" Foreground="{StaticResource MutedBrush}" Text="{Binding RightPaneSubtitle}" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       Text="{Binding RightPaneSubtitle}"
+                                       TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </DockPanel>
 
@@ -778,7 +812,7 @@
                                                         CornerRadius="7"
                                                         ClipToBounds="True">
                                                     <Grid>
-                                                        <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                                        <Image Source="{Binding Thumbnail, IsAsync=True}" Stretch="UniformToFill" />
                                                         <Border VerticalAlignment="Bottom" Background="#9C111111" Padding="6,3">
                                                             <TextBlock Foreground="#D0D0D0" FontSize="11" Text="{Binding TimeLabel}" />
                                                         </Border>
@@ -844,7 +878,7 @@
                                       MouseMove="SessionPreviewContentGrid_OnMouseMove"
                                       MouseLeave="SessionPreviewContentGrid_OnMouseLeave">
                                     <ScrollViewer x:Name="SessionPreviewScrollViewer"
-                                                  HorizontalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Hidden"
                                                   VerticalScrollBarVisibility="Auto"
                                                   CanContentScroll="False"
                                                   HorizontalContentAlignment="Center"
@@ -867,7 +901,7 @@
                                         </ScrollViewer.Style>
                                         <Grid Background="Transparent">
                                             <Image x:Name="SessionPreviewImage"
-                                                   Source="{Binding SelectedCapture.PreviewImage}"
+                                                   Source="{Binding SelectedCapture.PreviewImage, IsAsync=True}"
                                                    Stretch="None"
                                                    HorizontalAlignment="Center"
                                                    VerticalAlignment="Center">
@@ -1070,11 +1104,15 @@
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Disabled"
                           CanContentScroll="False">
                 <DockPanel LastChildFill="False">
-                <TextBlock DockPanel.Dock="Left" Foreground="{StaticResource MutedBrush}" Text="{Binding StatusText}" />
+                <TextBlock DockPanel.Dock="Left"
+                           Foreground="{StaticResource MutedBrush}"
+                           Text="{Binding StatusText}"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="620" />
                 <Border DockPanel.Dock="Right"
                         Padding="10,6"
                         Background="#1B1B1B"

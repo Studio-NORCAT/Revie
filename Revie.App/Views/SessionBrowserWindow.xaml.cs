@@ -820,24 +820,65 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
             var validRecords = records.Where(HasValidImageFile).ToArray();
             var skippedCount = records.Count - validRecords.Length;
+            StatusText = $"Preparing {validRecords.Length:n0} capture(s)...";
+
+            var prepared = await Task.Run(() =>
+            {
+                var list = new List<CaptureListItemViewModel>(validRecords.Length);
+                var skipped = 0;
+                foreach (var record in validRecords)
+                {
+                    try
+                    {
+                        list.Add(new CaptureListItemViewModel(record));
+                    }
+                    catch (Exception ex)
+                    {
+                        skipped++;
+                        AppLogService.Warn("Session.Open.ViewModelSkipped", "Skipping invalid session capture record.", new
+                        {
+                            record.Metadata.JsonPath,
+                            Error = ex.Message
+                        });
+                    }
+                }
+
+                // Preload some visuals off the UI thread to reduce initial hitching.
+                var prewarmCount = Math.Min(28, list.Count);
+                for (var i = 0; i < prewarmCount; i++)
+                {
+                    _ = list[i].Thumbnail;
+                }
+
+                if (list.Count > 0 && !list[0].IsVideo)
+                {
+                    _ = list[0].PreviewImage;
+                }
+
+                return (list, skipped);
+            });
+            skippedCount += prepared.skipped;
+            if (!ReferenceEquals(SelectedSession, targetSession))
+            {
+                return;
+            }
 
             SessionCaptures.Clear();
-            foreach (var record in validRecords)
+            const int addBatchSize = 64;
+            for (var i = 0; i < prepared.list.Count; i++)
             {
-                try
+                SessionCaptures.Add(prepared.list[i]);
+                if ((i + 1) % addBatchSize == 0)
                 {
-                    SessionCaptures.Add(new CaptureListItemViewModel(record));
-                }
-                catch (Exception ex)
-                {
-                    skippedCount++;
-                    AppLogService.Warn("Session.Open.ViewModelSkipped", "Skipping invalid session capture record.", new
+                    StatusText = $"Opening '{targetSession.SessionName}'... {i + 1:n0}/{prepared.list.Count:n0}";
+                    await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                    if (!ReferenceEquals(SelectedSession, targetSession))
                     {
-                        record.Metadata.JsonPath,
-                        Error = ex.Message
-                    });
+                        return;
+                    }
                 }
             }
+
             RebuildSessionCaptureUserChoices();
             RebuildSessionContextChoices();
 
@@ -853,6 +894,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
             IsInCaptureMode = true;
             SelectedCapture = SessionCaptures.FirstOrDefault();
+            await EnsureSelectedCapturePreviewReadyAsync();
             MarkSessionAsViewed(targetSession);
             StatusText = skippedCount > 0
                 ? $"Loaded {SessionCaptures.Count} capture(s), skipped {skippedCount} invalid item(s)."
@@ -870,6 +912,28 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         {
             IsBusy = false;
         }
+    }
+
+    private async Task EnsureSelectedCapturePreviewReadyAsync()
+    {
+        if (SelectedCapture is null)
+        {
+            return;
+        }
+
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (!SelectedCapture.IsVideo)
+            {
+                _ = SelectedCapture.PreviewImage;
+                FitPreviewToViewport();
+            }
+
+            SessionPreviewScrollViewer.UpdateLayout();
+        }, DispatcherPriority.Background);
+
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Loaded);
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
     }
 
     private async void DeleteSession(SessionFolderSummary? session)

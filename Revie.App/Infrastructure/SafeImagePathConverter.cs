@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -8,6 +9,7 @@ namespace Revie.App.Infrastructure;
 public sealed class SafeImagePathConverter : IValueConverter
 {
     private static readonly ImageSource EmptyImageSource = new BitmapImage();
+    private static readonly ConcurrentDictionary<string, ImageSource> ImageCache = new(StringComparer.OrdinalIgnoreCase);
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -17,20 +19,84 @@ public sealed class SafeImagePathConverter : IValueConverter
             return EmptyImageSource;
         }
 
+        var decodeWidth = TryParseDecodeWidth(parameter);
+        var lastWriteTicks = TryGetLastWriteTicks(path);
+        var cacheKey = $"{path}|{decodeWidth}|{lastWriteTicks}";
+        if (ImageCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        const int maxAttempts = 4;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                using var stream = OpenReadStream(path);
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache | BitmapCreateOptions.IgnoreColorProfile;
+                if (decodeWidth > 0)
+                {
+                    bitmap.DecodePixelWidth = decodeWidth;
+                }
+
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                if (ImageCache.Count > 800)
+                {
+                    ImageCache.Clear();
+                }
+
+                ImageCache[cacheKey] = bitmap;
+                return bitmap;
+            }
+            catch when (attempt < maxAttempts)
+            {
+                Thread.Sleep(45 * attempt);
+            }
+            catch
+            {
+                return EmptyImageSource;
+            }
+        }
+
+        return EmptyImageSource;
+    }
+
+    private static int TryParseDecodeWidth(object? parameter)
+    {
+        return parameter switch
+        {
+            int width when width > 0 => width,
+            string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var width) && width > 0 => width,
+            _ => 0
+        };
+    }
+
+    private static long TryGetLastWriteTicks(string path)
+    {
         try
         {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.UriSource = new Uri(path, UriKind.Absolute);
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
+            return File.GetLastWriteTimeUtc(path).Ticks;
         }
         catch
         {
-            return EmptyImageSource;
+            return 0;
+        }
+    }
+
+    private static FileStream OpenReadStream(string path)
+    {
+        try
+        {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        }
+        catch (IOException)
+        {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         }
     }
 

@@ -5,6 +5,8 @@ namespace Revie.App.Services;
 
 public sealed class SessionArchiveService
 {
+    public readonly record struct SessionSaveProgress(int ProcessedCaptureCount, int TotalCaptureCount);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -20,6 +22,7 @@ public sealed class SessionArchiveService
         DateTime sessionEndUtc,
         IReadOnlyList<CaptureRecord> captures,
         string activeProject,
+        IProgress<SessionSaveProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         return Task.Run(() => SaveSessionCore(
@@ -30,7 +33,8 @@ public sealed class SessionArchiveService
             sessionEndLocal,
             sessionEndUtc,
             captures,
-            activeProject), cancellationToken);
+            activeProject,
+            progress), cancellationToken);
     }
 
     private static string SaveSessionCore(
@@ -41,7 +45,8 @@ public sealed class SessionArchiveService
         DateTime sessionEndLocal,
         DateTime sessionEndUtc,
         IReadOnlyList<CaptureRecord> captures,
-        string activeProject)
+        string activeProject,
+        IProgress<SessionSaveProgress>? progress)
     {
         if (string.IsNullOrWhiteSpace(storageRoot))
         {
@@ -66,6 +71,7 @@ public sealed class SessionArchiveService
             .ToArray();
 
         var exported = new List<SessionCaptureEntry>(orderedCaptures.Length);
+        progress?.Report(new SessionSaveProgress(0, orderedCaptures.Length));
         for (var i = 0; i < orderedCaptures.Length; i++)
         {
             var record = orderedCaptures[i];
@@ -77,7 +83,10 @@ public sealed class SessionArchiveService
 
             if (!string.IsNullOrWhiteSpace(sourceDirectory) && Directory.Exists(sourceDirectory))
             {
-                CopyDirectory(sourceDirectory, targetCaptureDirectory);
+                if (!TryMoveDirectory(sourceDirectory, targetCaptureDirectory))
+                {
+                    CopyDirectory(sourceDirectory, targetCaptureDirectory);
+                }
             }
             else
             {
@@ -113,6 +122,8 @@ public sealed class SessionArchiveService
                 OriginalJsonPath = record.Metadata.JsonPath ?? string.Empty,
                 ExportedCaptureDirectory = targetCaptureDirectory
             });
+
+            progress?.Report(new SessionSaveProgress(i + 1, orderedCaptures.Length));
         }
 
         var manifest = new SessionManifest
@@ -130,6 +141,39 @@ public sealed class SessionArchiveService
         var manifestPath = Path.Combine(sessionDirectory, "session.json");
         SafeFileWriteService.WriteJsonAtomic(manifestPath, manifest, JsonOptions);
         return sessionDirectory;
+    }
+
+    private static bool TryMoveDirectory(string sourcePath, string targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(targetPath))
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(sourcePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var targetParent = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrWhiteSpace(targetParent))
+            {
+                Directory.CreateDirectory(targetParent);
+            }
+
+            Directory.Move(sourcePath, targetPath);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string EnsureUniqueDirectory(string desiredPath)

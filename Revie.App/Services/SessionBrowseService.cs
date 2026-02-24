@@ -7,6 +7,25 @@ namespace Revie.App.Services;
 public sealed class SessionBrowseService
 {
     private const string DeleteQueueDirectoryName = ".revie-delete-queue";
+    private static readonly string[] PreferredPreviewFileNames =
+    {
+        "thumbnail.png",
+        "thumbnail.jpg",
+        "thumbnail.jpeg",
+        "capture.png",
+        "capture.jpg",
+        "capture.jpeg",
+        "capture.webp",
+        "capture.bmp"
+    };
+    private static readonly HashSet<string> ImageFileExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".bmp",
+        ".webp"
+    };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -104,7 +123,7 @@ public sealed class SessionBrowseService
                             continue;
                         }
 
-                        var manifestPreviewPath = ResolvePreviewImageFromCaptureDirectory(exportedCaptureDirectory);
+                        var manifestPreviewPath = ResolvePreviewImageFromCaptureDirectory(exportedCaptureDirectory, folder);
                         if (!string.IsNullOrWhiteSpace(manifestPreviewPath))
                         {
                             previewImagePath = manifestPreviewPath;
@@ -364,7 +383,7 @@ public sealed class SessionBrowseService
         return !string.IsNullOrWhiteSpace(record.ImagePath) && File.Exists(record.ImagePath);
     }
 
-    private static string ResolvePreviewImageFromCaptureDirectory(string captureDirectory)
+    private static string ResolvePreviewImageFromCaptureDirectory(string captureDirectory, string sessionFolder)
     {
         if (string.IsNullOrWhiteSpace(captureDirectory))
         {
@@ -372,19 +391,17 @@ public sealed class SessionBrowseService
         }
 
         var normalized = captureDirectory.Trim();
+        if (!Path.IsPathRooted(normalized))
+        {
+            normalized = Path.GetFullPath(Path.Combine(sessionFolder, normalized));
+        }
+
         if (!Directory.Exists(normalized))
         {
             return string.Empty;
         }
 
-        var thumbnailPath = Path.Combine(normalized, "thumbnail.png");
-        if (File.Exists(thumbnailPath))
-        {
-            return thumbnailPath;
-        }
-
-        var imagePath = Path.Combine(normalized, "capture.png");
-        return File.Exists(imagePath) ? imagePath : string.Empty;
+        return FindBestPreviewFileInDirectory(normalized);
     }
 
     private static string FindSessionPreviewImagePath(string sessionFolder)
@@ -397,10 +414,22 @@ public sealed class SessionBrowseService
                 return string.Empty;
             }
 
+            var captureDirectories = Directory.EnumerateDirectories(capturesRoot)
+                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var captureDirectory in captureDirectories)
+            {
+                var previewFromDirectory = FindBestPreviewFileInDirectory(captureDirectory);
+                if (!string.IsNullOrWhiteSpace(previewFromDirectory))
+                {
+                    return previewFromDirectory;
+                }
+            }
+
             string? latestImagePath = null;
             DateTime latestWriteTimeUtc = DateTime.MinValue;
-            foreach (var imagePath in Directory.EnumerateFiles(capturesRoot, "thumbnail.png", SearchOption.AllDirectories)
-                         .Concat(Directory.EnumerateFiles(capturesRoot, "capture.png", SearchOption.AllDirectories)))
+            foreach (var imagePath in Directory.EnumerateFiles(capturesRoot, "*.*", SearchOption.AllDirectories)
+                         .Where(path => ImageFileExtensions.Contains(Path.GetExtension(path))))
             {
                 try
                 {
@@ -418,6 +447,35 @@ public sealed class SessionBrowseService
             }
 
             return latestImagePath ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string FindBestPreviewFileInDirectory(string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+        {
+            return string.Empty;
+        }
+
+        foreach (var fileName in PreferredPreviewFileNames)
+        {
+            var candidate = Path.Combine(directoryPath, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        try
+        {
+            return Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(path => ImageFileExtensions.Contains(Path.GetExtension(path)))
+                .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
+                .FirstOrDefault() ?? string.Empty;
         }
         catch
         {

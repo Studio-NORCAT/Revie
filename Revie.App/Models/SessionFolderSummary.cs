@@ -16,7 +16,7 @@ public sealed class SessionFolderSummary : INotifyPropertyChanged
     public string FolderPath { get; init; } = string.Empty;
     public int CaptureCount { get; init; }
     public string PreviewImagePath { get; init; } = string.Empty;
-    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewImagePath) && File.Exists(PreviewImagePath);
+    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewImagePath);
     public int UnviewedCaptureCount
     {
         get => _unviewedCaptureCount;

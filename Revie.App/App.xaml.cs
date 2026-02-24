@@ -31,6 +31,7 @@ public partial class App : System.Windows.Application
     private bool _isCapturing;
     private DateTime? _videoStartLocal;
     private bool _isSessionActive;
+    private bool _isSessionSaveInProgress;
     private DateTime _sessionStartLocal;
     private DateTime _sessionStartUtc;
     private string _activeSessionCaptureBaseRoot = string.Empty;
@@ -319,6 +320,12 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save in progress. Capture is temporarily locked.");
+            return;
+        }
+
         if (!_storageService.ValidateWriteAccess(_settings.StorageRoot, out var storageError))
         {
             ShowTrayNotification("Capture failed", $"Storage root unavailable: {storageError}", Forms.ToolTipIcon.Error);
@@ -333,6 +340,7 @@ public partial class App : System.Windows.Application
         {
             using var toolbarSuppression = _overlayWindow.SuppressToolbarForCapture();
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+            await Task.Delay(24);
             var overlayPng = _overlayWindow.RenderOverlayPng();
             var captureBounds = _overlayWindow.GetOverlayBoundsPixels();
             var sessionName = _isSessionActive ? BuildDefaultSessionName(_sessionStartLocal) : string.Empty;
@@ -419,6 +427,12 @@ public partial class App : System.Windows.Application
 
     private void StartSession()
     {
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save in progress. Start session is temporarily locked.");
+            return;
+        }
+
         if (_isSessionActive)
         {
             _mainViewModel?.SetStatus("A review session is already active.");
@@ -452,6 +466,18 @@ public partial class App : System.Windows.Application
 
     private async Task SaveSessionAsync()
     {
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save already in progress.");
+            return;
+        }
+
+        if (_mainViewModel?.IsBusy == true)
+        {
+            _mainViewModel.SetStatus("Please wait for the current operation to finish.");
+            return;
+        }
+
         if (!_isSessionActive)
         {
             _mainViewModel?.SetStatus("No active review session. Click Start Session first.");
@@ -477,10 +503,24 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        _isSessionSaveInProgress = true;
+        _mainViewModel?.SetBusyState(true, $"Saving session '{nameDialog.SessionName}'...");
         try
         {
             var snapshot = _sessionCaptures.ToArray();
             var activeProject = GetEffectiveActiveProject();
+            var progress = new Progress<SessionArchiveService.SessionSaveProgress>(value =>
+            {
+                if (value.TotalCaptureCount <= 0)
+                {
+                    _mainViewModel?.SetStatus("Saving session and organizing captures...");
+                    return;
+                }
+
+                _mainViewModel?.SetStatus(
+                    $"Saving session and organizing captures... {value.ProcessedCaptureCount:n0}/{value.TotalCaptureCount:n0}");
+            });
+
             var savedFolder = await _sessionArchiveService.SaveSessionAsync(
                 _settings.StorageRoot,
                 nameDialog.SessionName,
@@ -489,7 +529,8 @@ public partial class App : System.Windows.Application
                 DateTime.Now,
                 DateTime.UtcNow,
                 snapshot,
-                activeProject);
+                activeProject,
+                progress);
 
             CleanupSessionCaptureSources(snapshot);
             CleanupActiveSessionCaptureRoot(_activeSessionCaptureBaseRoot);
@@ -501,7 +542,8 @@ public partial class App : System.Windows.Application
             RefreshSessionNotifications();
             CleanupLegacySessionActiveRootIfEmpty();
 
-            _mainViewModel?.SetStatus($"Session saved to {savedFolder}");
+            var completionMessage = $"Session '{nameDialog.SessionName}' saved ({snapshot.Length:n0} capture(s)).";
+            _mainViewModel?.SetStatus($"{completionMessage} Folder: {savedFolder}");
             AppLogService.Info("Session.Save", "Session saved.", new
             {
                 Folder = savedFolder,
@@ -509,6 +551,7 @@ public partial class App : System.Windows.Application
                 CaptureCount = snapshot.Length
             });
             ShowTrayNotification("Session saved", savedFolder);
+            ShowCaptureToast(completionMessage);
         }
         catch (Exception ex)
         {
@@ -516,10 +559,21 @@ public partial class App : System.Windows.Application
             ShowTrayNotification("Save session failed", ex.Message, Forms.ToolTipIcon.Error);
             _mainViewModel?.SetStatus($"Save session failed: {ex.Message}");
         }
+        finally
+        {
+            _isSessionSaveInProgress = false;
+            _mainViewModel?.SetBusyState(false);
+        }
     }
 
     private async Task CancelSessionAsync()
     {
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save in progress. Cancel session is temporarily locked.");
+            return;
+        }
+
         if (_isCapturing)
         {
             _mainViewModel?.SetStatus("Capture in progress. Try canceling again in a moment.");
@@ -653,6 +707,12 @@ public partial class App : System.Windows.Application
 
     private async Task StartVideoCaptureAsync()
     {
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save in progress. Video capture is temporarily locked.");
+            return;
+        }
+
         if (_videoCaptureService.IsRecording)
         {
             _mainViewModel?.SetStatus("Video recording is already active.");
@@ -701,6 +761,12 @@ public partial class App : System.Windows.Application
 
     private async Task StopVideoCaptureAsync()
     {
+        if (_isSessionSaveInProgress)
+        {
+            _mainViewModel?.SetStatus("Session save in progress. Video actions are temporarily locked.");
+            return;
+        }
+
         if (!_videoCaptureService.IsRecording)
         {
             _mainViewModel?.SetStatus("No active video segment.");

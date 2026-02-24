@@ -86,8 +86,8 @@ public sealed class MainViewModel : ObservableObject
         LatestUserFilterChoices = new ObservableCollection<string> { AllUsersLabel, NoUserLabel };
 
         RefreshCommand = new RelayCommand(async _ => await RefreshAsync(), _ => !IsBusy);
-        OpenInExplorerCommand = new RelayCommand(_ => OpenSelectedInExplorer(), _ => SelectedCapture is not null);
-        OpenSettingsCommand = new RelayCommand(_ => SettingsRequested?.Invoke(this, EventArgs.Empty));
+        OpenInExplorerCommand = new RelayCommand(_ => OpenSelectedInExplorer(), _ => SelectedCapture is not null && !IsBusy);
+        OpenSettingsCommand = new RelayCommand(_ => SettingsRequested?.Invoke(this, EventArgs.Empty), _ => !IsBusy);
         ApplyFiltersCommand = new RelayCommand(_ => ApplyFilters());
         ClearFiltersCommand = new RelayCommand(_ => ClearFilters());
         SetQuickRangeCommand = new RelayCommand(parameter => ApplyQuickRange(parameter as string));
@@ -97,12 +97,12 @@ public sealed class MainViewModel : ObservableObject
         AssignProjectCommand = new RelayCommand(async _ => await AssignSelectedCaptureToProjectAsync(), _ => SelectedCapture is not null);
         AssignUserCommand = new RelayCommand(async _ => await AssignSelectedCaptureToUserAsync(), _ => SelectedCapture is not null);
         SaveNoteCommand = new RelayCommand(async _ => await PersistSelectedCaptureMetadataAsync(), _ => SelectedCapture is not null);
-        StartSessionCommand = new RelayCommand(_ => StartSessionRequested?.Invoke(this, EventArgs.Empty), _ => !IsSessionActive);
-        SaveSessionCommand = new RelayCommand(_ => SaveSessionRequested?.Invoke(this, EventArgs.Empty), _ => IsSessionActive);
-        CancelSessionCommand = new RelayCommand(_ => CancelSessionRequested?.Invoke(this, EventArgs.Empty), _ => IsSessionActive);
-        OpenSessionsCommand = new RelayCommand(_ => OpenSessionsRequested?.Invoke(this, EventArgs.Empty));
-        StartVideoCommand = new RelayCommand(_ => StartVideoRequested?.Invoke(this, EventArgs.Empty), _ => !IsVideoRecording);
-        StopVideoCommand = new RelayCommand(_ => StopVideoRequested?.Invoke(this, EventArgs.Empty), _ => IsVideoRecording);
+        StartSessionCommand = new RelayCommand(_ => StartSessionRequested?.Invoke(this, EventArgs.Empty), _ => !IsSessionActive && !IsBusy);
+        SaveSessionCommand = new RelayCommand(_ => SaveSessionRequested?.Invoke(this, EventArgs.Empty), _ => IsSessionActive && !IsBusy);
+        CancelSessionCommand = new RelayCommand(_ => CancelSessionRequested?.Invoke(this, EventArgs.Empty), _ => IsSessionActive && !IsBusy);
+        OpenSessionsCommand = new RelayCommand(_ => OpenSessionsRequested?.Invoke(this, EventArgs.Empty), _ => !IsBusy);
+        StartVideoCommand = new RelayCommand(_ => StartVideoRequested?.Invoke(this, EventArgs.Empty), _ => !IsVideoRecording && !IsBusy);
+        StopVideoCommand = new RelayCommand(_ => StopVideoRequested?.Invoke(this, EventArgs.Empty), _ => IsVideoRecording && !IsBusy);
     }
 
     public event EventHandler? SettingsRequested;
@@ -569,6 +569,15 @@ public sealed class MainViewModel : ObservableObject
         StatusText = status;
     }
 
+    public void SetBusyState(bool isBusy, string? status = null)
+    {
+        IsBusy = isBusy;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            StatusText = status;
+        }
+    }
+
     public void SetPreviewLoading(bool isLoading)
     {
         IsPreviewLoading = isLoading;
@@ -916,7 +925,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         var confirmation = System.Windows.MessageBox.Show(
-            $"Purge all {Captures.Count} recent capture(s)? This does not affect saved Sessions.",
+            "This will purge all content outside of captured session. Do you wish to continue?",
             "Purge Recent Captures",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,

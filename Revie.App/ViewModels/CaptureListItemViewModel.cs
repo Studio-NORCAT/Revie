@@ -1,12 +1,7 @@
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
-using System.Windows;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Revie.App.Infrastructure;
 using Revie.App.Models;
-using Revie.App.Native;
 using Revie.App.Services;
 
 namespace Revie.App.ViewModels;
@@ -220,13 +215,25 @@ public sealed class CaptureListItemViewModel : ObservableObject
         if (IsVideo)
         {
             var thumb = (Record.Metadata.ThumbnailPath ?? string.Empty).Trim();
-            if (!string.IsNullOrWhiteSpace(thumb))
+            if (!string.IsNullOrWhiteSpace(thumb) && File.Exists(thumb))
             {
                 return thumb;
             }
 
             var captureDir = Record.CaptureDirectory;
-            return Path.Combine(captureDir, "thumbnail.png");
+            var fallbackThumbnail = Path.Combine(captureDir, "thumbnail.png");
+            if (File.Exists(fallbackThumbnail))
+            {
+                return fallbackThumbnail;
+            }
+
+            var fallbackCaptureImage = Path.Combine(captureDir, "capture.png");
+            if (File.Exists(fallbackCaptureImage))
+            {
+                return fallbackCaptureImage;
+            }
+
+            return thumb;
         }
 
         return Record.ImagePath;
@@ -257,33 +264,29 @@ public sealed class CaptureListItemViewModel : ObservableObject
             return EmptyImageSource;
         }
 
-        const int maxAttempts = 4;
+        const int maxAttempts = 5;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             try
             {
-                using var baseBitmap = new System.Drawing.Bitmap(path);
-                using var renderBitmap = ResizeIfNeeded(baseBitmap, decodeWidth);
-                var hBitmap = renderBitmap.GetHbitmap();
+                using var stream = OpenReadStream(path);
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+                if (decodeWidth > 0)
+                {
+                    bitmap.DecodePixelWidth = decodeWidth;
+                }
 
-                try
-                {
-                    var source = Imaging.CreateBitmapSourceFromHBitmap(
-                        hBitmap,
-                        IntPtr.Zero,
-                        Int32Rect.Empty,
-                        BitmapSizeOptions.FromEmptyOptions());
-                    source.Freeze();
-                    return source;
-                }
-                finally
-                {
-                    NativeMethods.DeleteObject(hBitmap);
-                }
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return bitmap;
             }
             catch when (attempt < maxAttempts)
             {
-                Thread.Sleep(80);
+                Thread.Sleep(70 * attempt);
             }
             catch
             {
@@ -294,22 +297,15 @@ public sealed class CaptureListItemViewModel : ObservableObject
         return EmptyImageSource;
     }
 
-    private static System.Drawing.Bitmap ResizeIfNeeded(System.Drawing.Bitmap source, int decodeWidth)
+    private static FileStream OpenReadStream(string path)
     {
-        if (decodeWidth <= 0 || source.Width <= decodeWidth)
+        try
         {
-            return (System.Drawing.Bitmap)source.Clone();
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         }
-
-        var targetHeight = Math.Max(1, (int)Math.Round((double)source.Height * decodeWidth / source.Width));
-        var resized = new System.Drawing.Bitmap(decodeWidth, targetHeight, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-
-        using var graphics = System.Drawing.Graphics.FromImage(resized);
-        graphics.CompositingQuality = CompositingQuality.HighQuality;
-        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        graphics.SmoothingMode = SmoothingMode.HighQuality;
-        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        graphics.DrawImage(source, 0, 0, decodeWidth, targetHeight);
-        return resized;
+        catch (IOException)
+        {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        }
     }
 }

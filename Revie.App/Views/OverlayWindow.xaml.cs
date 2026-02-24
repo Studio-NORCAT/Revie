@@ -108,9 +108,14 @@ public partial class OverlayWindow : Window
     public IDisposable SuppressToolbarForCapture()
     {
         var previous = _suppressToolbar;
+        var previousOpacity = Opacity;
+        var previousHitTest = IsHitTestVisible;
         _suppressToolbar = true;
+        Opacity = 0;
+        IsHitTestVisible = false;
         ApplyToolbarVisibility();
-        return new ToolbarSuppression(this, previous);
+        UpdateLayout();
+        return new ToolbarSuppression(this, previous, previousOpacity, previousHitTest);
     }
 
     public void ApplyPenSizeSettings(PenSizeSettings settings)
@@ -370,12 +375,20 @@ public partial class OverlayWindow : Window
     {
         private readonly OverlayWindow _owner;
         private readonly bool _previousValue;
+        private readonly double _previousOpacity;
+        private readonly bool _previousHitTestVisible;
         private bool _disposed;
 
-        public ToolbarSuppression(OverlayWindow owner, bool previousValue)
+        public ToolbarSuppression(
+            OverlayWindow owner,
+            bool previousValue,
+            double previousOpacity,
+            bool previousHitTestVisible)
         {
             _owner = owner;
             _previousValue = previousValue;
+            _previousOpacity = previousOpacity;
+            _previousHitTestVisible = previousHitTestVisible;
         }
 
         public void Dispose()
@@ -387,7 +400,10 @@ public partial class OverlayWindow : Window
 
             _disposed = true;
             _owner._suppressToolbar = _previousValue;
+            _owner.Opacity = _previousOpacity;
+            _owner.IsHitTestVisible = _previousHitTestVisible;
             _owner.ApplyToolbarVisibility();
+            _owner.UpdateLayout();
         }
     }
 }
