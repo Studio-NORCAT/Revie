@@ -7,6 +7,7 @@ namespace Revie.App.Services;
 public sealed class SessionBrowseService
 {
     private const string DeleteQueueDirectoryName = ".revie-delete-queue";
+    private const string DeletePendingMarkerFileName = ".revie-delete-pending";
     private static readonly string[] PreferredPreviewFileNames =
     {
         "thumbnail.png",
@@ -49,6 +50,7 @@ public sealed class SessionBrowseService
         {
             sessionFolders = Directory.EnumerateDirectories(sessionsRoot)
                 .Where(folder => !IsPendingDeletePath(folder))
+                .Where(folder => !IsDeletePendingFolder(folder))
                 .ToArray();
         }
         catch (Exception ex)
@@ -75,6 +77,11 @@ public sealed class SessionBrowseService
 
                 if (!File.Exists(manifestPath))
                 {
+                    if (defaultCount <= 0)
+                    {
+                        continue;
+                    }
+
                     sessionUsers = CollectSessionUsers(folder);
                     previewImagePath = FindSessionPreviewImagePath(folder);
                     sessions.Add(new SessionFolderSummary
@@ -104,7 +111,7 @@ public sealed class SessionBrowseService
                 var project = TryReadString(root, "ActiveProjectAtSave");
                 var start = TryReadDateTime(root, "SessionStartLocal") ?? defaultStart;
                 var end = TryReadDateTime(root, "SessionEndLocal") ?? defaultEnd;
-                var captureCount = TryReadInt(root, "CaptureCount") ?? defaultCount;
+                var captureCount = defaultCount;
                 if (root.TryGetProperty("Captures", out var capturesElement) &&
                     capturesElement.ValueKind == JsonValueKind.Array)
                 {
@@ -139,6 +146,12 @@ public sealed class SessionBrowseService
                 if (string.IsNullOrWhiteSpace(previewImagePath))
                 {
                     previewImagePath = FindSessionPreviewImagePath(folder);
+                }
+
+                // Ignore orphaned/partially deleted session folders that no longer contain captures.
+                if (defaultCount <= 0 && string.IsNullOrWhiteSpace(previewImagePath))
+                {
+                    continue;
                 }
 
                 sessions.Add(new SessionFolderSummary
@@ -248,15 +261,16 @@ public sealed class SessionBrowseService
             .ToArray();
     }
 
-    private static int CountCaptureFolders(string sessionFolder)
+    private int CountCaptureFolders(string sessionFolder)
     {
-        var capturesRoot = Path.Combine(sessionFolder, "captures");
-        if (!Directory.Exists(capturesRoot))
+        try
+        {
+            return GetSessionCaptures(sessionFolder).Count(HasValidMediaFile);
+        }
+        catch
         {
             return 0;
         }
-
-        return Directory.EnumerateDirectories(capturesRoot).Count();
     }
 
     private CaptureRecord? TryLoadRecordFromJsonPath(string jsonPath, string sessionFolderPath, bool applyLinkedAnnotationOverrides)
@@ -351,7 +365,7 @@ public sealed class SessionBrowseService
         }
     }
 
-    private static SessionFolderSummary? TryBuildFallbackSummary(string folder)
+    private SessionFolderSummary? TryBuildFallbackSummary(string folder)
     {
         try
         {
@@ -678,5 +692,23 @@ public sealed class SessionBrowseService
         var normalizedPath = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
         var marker = $"{Path.DirectorySeparatorChar}{DeleteQueueDirectoryName}{Path.DirectorySeparatorChar}";
         return normalizedPath.Contains(marker, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDeletePendingFolder(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var markerPath = Path.Combine(folderPath, DeletePendingMarkerFileName);
+            return File.Exists(markerPath);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

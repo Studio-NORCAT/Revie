@@ -49,6 +49,42 @@ public sealed class SessionBrowseServiceTests
         Assert.Equal("Bravo", capture.Metadata.Project);
     }
 
+    [Fact]
+    public void GetSessions_SkipsOrphanedEmptySessionFolders()
+    {
+        using var temp = new TempDirectory();
+        var sessionsRoot = Path.Combine(temp.Path, "Sessions");
+        var emptySessionFolder = Path.Combine(sessionsRoot, "20260220_Empty");
+        var validSessionFolder = Path.Combine(sessionsRoot, "20260220_Valid");
+        var validCaptureFolder = Path.Combine(validSessionFolder, "captures", "20260220_101010_000");
+
+        Directory.CreateDirectory(emptySessionFolder);
+        Directory.CreateDirectory(validCaptureFolder);
+        File.WriteAllText(Path.Combine(validCaptureFolder, "capture.png"), "placeholder");
+        File.WriteAllText(Path.Combine(validCaptureFolder, "capture.json"), BuildCaptureJson(validCaptureFolder, "Bravo"));
+
+        var service = new SessionBrowseService();
+        var sessions = service.GetSessions(temp.Path);
+
+        var session = Assert.Single(sessions);
+        Assert.Equal("20260220_Valid", session.SessionName);
+        Assert.Equal(1, session.CaptureCount);
+    }
+
+    [Fact]
+    public void GetSessions_SkipsSessionsWithOnlyEmptyCaptureDirectories()
+    {
+        using var temp = new TempDirectory();
+        var sessionFolder = Path.Combine(temp.Path, "Sessions", "20260220_StaleDelete");
+        var emptyCaptureFolder = Path.Combine(sessionFolder, "captures", "20260220_101010_000");
+        Directory.CreateDirectory(emptyCaptureFolder);
+
+        var service = new SessionBrowseService();
+        var sessions = service.GetSessions(temp.Path);
+
+        Assert.Empty(sessions);
+    }
+
     private static string BuildCaptureJson(string captureFolder, string project)
     {
         var metadata = new CaptureMetadata

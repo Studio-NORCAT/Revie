@@ -12,8 +12,8 @@
     <Title>Revie</Title>
     <ApplicationIcon>Assets\revie.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.0.4</Version>
-    <InformationalVersion>1.0.4+build.$([System.DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss"))</InformationalVersion>
+    <Version>1.0.5</Version>
+    <InformationalVersion>1.0.5+build.$([System.DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss"))</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

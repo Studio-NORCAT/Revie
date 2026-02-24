@@ -678,7 +678,7 @@ public partial class App : System.Windows.Application
 
         _settings = settingsWindow.ResultSettings;
         NormalizeSettings();
-        var taxonomyChanged = await SyncTaxonomyWithStorageAsync("settings");
+        var taxonomyChanged = await SyncTaxonomyWithStorageAsync("settings", localValuesOverrideShared: true);
         await _settingsService.SaveAsync(_settings);
         AppLogService.Info("Settings.Updated", "Settings saved.", new
         {
@@ -1183,7 +1183,7 @@ public partial class App : System.Windows.Application
         return CaptureService.NormalizeProject(_settings.ActiveProject);
     }
 
-    private async Task<bool> SyncTaxonomyWithStorageAsync(string source)
+    private async Task<bool> SyncTaxonomyWithStorageAsync(string source, bool localValuesOverrideShared = false)
     {
         if (string.IsNullOrWhiteSpace(_settings.StorageRoot))
         {
@@ -1204,7 +1204,8 @@ public partial class App : System.Windows.Application
         var result = await _settingsService.SyncSharedTaxonomyAsync(
             _settings.StorageRoot,
             _settings.Projects,
-            _settings.Users);
+            _settings.Users,
+            localValuesOverrideShared);
         var projectsChanged = !_settings.Projects.SequenceEqual(result.Projects, StringComparer.OrdinalIgnoreCase);
         var usersChanged = !_settings.Users.SequenceEqual(result.Users, StringComparer.OrdinalIgnoreCase);
         if (projectsChanged || usersChanged)

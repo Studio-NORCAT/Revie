@@ -64,6 +64,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private readonly GridLength _defaultSessionLeftColumnWidth;
     private readonly GridLength _defaultSessionSpacerColumnWidth;
     private readonly Thickness _defaultSessionRootMargin;
+    private const string DeletePendingMarkerFileName = ".revie-delete-pending";
     private System.Windows.Point _panStartPoint;
     private double _panStartHorizontalOffset;
     private double _panStartVerticalOffset;
@@ -630,6 +631,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     {
         var previousSessionPath = SelectedSession?.FolderPath ?? string.Empty;
         var filtered = _allSessions
+            .Where(session => session.CaptureCount > 0)
             .Where(session => MatchesSessionProjectFilter(session, SelectedSessionProjectFilter))
             .Where(session => MatchesSessionUserFilter(session, SelectedSessionUserFilter))
             .OrderByDescending(session => session.StartLocal)
@@ -943,6 +945,11 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        if (IsBusy)
+        {
+            return;
+        }
+
         var result = System.Windows.MessageBox.Show(
             $"Are you sure you want to delete session '{session.SessionName}' and its files?",
             "Delete Session",
@@ -957,6 +964,12 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
         var deletedSessionName = session.SessionName;
         var deletedSessionPath = session.FolderPath;
+        var shouldRefreshSessions = false;
+        string? refreshStatusOverride = null;
+
+        MarkSessionPendingDelete(deletedSessionPath);
+        IsBusy = true;
+        StatusText = $"Deleting session '{deletedSessionName}'...";
         try
         {
             // Remove the session from bound collections first so WPF releases image/file handles.
@@ -971,6 +984,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             SelectedCapture = null;
             IsInCaptureMode = false;
 
+            StatusText = $"Deleting session '{deletedSessionName}'... releasing preview handles";
             ReleaseSessionHandles(session);
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
 
@@ -987,14 +1001,15 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
                 }
             }
 
+            StatusText = $"Deleting session '{deletedSessionName}'... removing files";
             var deleteResult = await RemoveSessionDirectoryAsync(deletedSessionPath);
             if (!deleteResult.success)
             {
-                RefreshSessions();
                 var reason = string.IsNullOrWhiteSpace(deleteResult.error)
                     ? $"'{deletedSessionName}' is in use. Close any app using it and retry."
                     : deleteResult.error;
-                StatusText = $"Delete session failed: {reason}";
+                shouldRefreshSessions = true;
+                refreshStatusOverride = $"Delete session failed: {reason}";
                 return;
             }
 
@@ -1015,13 +1030,46 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            StatusText = $"Delete session failed: {ex.Message}";
+            shouldRefreshSessions = true;
+            refreshStatusOverride = $"Delete session failed: {ex.Message}";
             AppLogService.Error("Session.Delete.Failed", "Session delete failed.", ex, new
             {
                 Session = deletedSessionName,
                 Path = deletedSessionPath
             });
-            RefreshSessions();
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (!shouldRefreshSessions)
+        {
+            return;
+        }
+
+        await RefreshSessionsAsync();
+        if (!string.IsNullOrWhiteSpace(refreshStatusOverride))
+        {
+            StatusText = refreshStatusOverride;
+        }
+    }
+
+    private static void MarkSessionPendingDelete(string sessionFolderPath)
+    {
+        if (string.IsNullOrWhiteSpace(sessionFolderPath) || !Directory.Exists(sessionFolderPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var markerPath = Path.Combine(sessionFolderPath, DeletePendingMarkerFileName);
+            File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch
+        {
+            // Best effort marker only.
         }
     }
 

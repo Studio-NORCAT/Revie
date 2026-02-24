@@ -50,6 +50,7 @@ public sealed class SettingsService
         string storageRoot,
         IEnumerable<string>? localProjects,
         IEnumerable<string>? localUsers,
+        bool localValuesOverrideShared = false,
         CancellationToken cancellationToken = default)
     {
         var normalizedLocalProjects = NormalizeItems(localProjects);
@@ -89,16 +90,20 @@ public sealed class SettingsService
             warning = $"Failed reading shared taxonomy: {ex.Message}";
         }
 
-        var mergedProjects = sharedProjects
-            .Concat(normalizedLocalProjects)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var mergedUsers = sharedUsers
-            .Concat(normalizedLocalUsers)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(user => user, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var mergedProjects = localValuesOverrideShared
+            ? normalizedLocalProjects.ToList()
+            : sharedProjects
+                .Concat(normalizedLocalProjects)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        var mergedUsers = localValuesOverrideShared
+            ? normalizedLocalUsers.ToList()
+            : sharedUsers
+                .Concat(normalizedLocalUsers)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(user => user, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
         var sharedProjectsChanged = !sharedProjects.SequenceEqual(mergedProjects, StringComparer.OrdinalIgnoreCase);
         var sharedUsersChanged = !sharedUsers.SequenceEqual(mergedUsers, StringComparer.OrdinalIgnoreCase);

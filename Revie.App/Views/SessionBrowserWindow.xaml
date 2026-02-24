@@ -1177,7 +1177,7 @@
                     <TextBlock HorizontalAlignment="Center"
                                Foreground="#F0F0F0"
                                FontWeight="SemiBold"
-                               Text="Loading..." />
+                               Text="Processing..." />
                     <TextBlock Margin="0,6,0,8"
                                HorizontalAlignment="Center"
                                Foreground="{StaticResource MutedBrush}"

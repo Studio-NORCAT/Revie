@@ -182,12 +182,20 @@ public partial class SettingsWindow : Window
         ResultSettings.ActiveProject = string.Equals(activeProject, NoActiveProjectLabel, StringComparison.OrdinalIgnoreCase)
             ? string.Empty
             : activeProject;
-        ResultSettings.ActiveUser = string.Empty;
+        var activeUser = (ActiveUserComboBox.SelectedItem as string ?? string.Empty).Trim();
+        ResultSettings.ActiveUser = string.Equals(activeUser, NoActiveUserLabel, StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : activeUser;
 
         if (!string.IsNullOrWhiteSpace(ResultSettings.ActiveProject) &&
             !ResultSettings.Projects.Contains(ResultSettings.ActiveProject, StringComparer.OrdinalIgnoreCase))
         {
             ResultSettings.Projects.Add(ResultSettings.ActiveProject);
+        }
+        if (!string.IsNullOrWhiteSpace(ResultSettings.ActiveUser) &&
+            !ResultSettings.Users.Contains(ResultSettings.ActiveUser, StringComparer.OrdinalIgnoreCase))
+        {
+            ResultSettings.Users.Add(ResultSettings.ActiveUser);
         }
         ResultSettings.Hotkeys = new Dictionary<string, HotkeyDefinition>(StringComparer.OrdinalIgnoreCase)
         {

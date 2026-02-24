@@ -91,9 +91,11 @@ public sealed class MainViewModel : ObservableObject
         ApplyFiltersCommand = new RelayCommand(_ => ApplyFilters());
         ClearFiltersCommand = new RelayCommand(_ => ClearFilters());
         SetQuickRangeCommand = new RelayCommand(parameter => ApplyQuickRange(parameter as string));
-        DeleteSelectedCaptureCommand = new RelayCommand(_ => DeleteSelectedCapture(), _ => SelectedCapture is not null);
-        DeleteCaptureCommand = new RelayCommand(parameter => DeleteCapture(parameter as CaptureListItemViewModel), parameter => parameter is CaptureListItemViewModel);
-        PurgeRecentCapturesCommand = new RelayCommand(_ => PurgeRecentCaptures(), _ => Captures.Count > 0 && !IsBusy);
+        DeleteSelectedCaptureCommand = new RelayCommand(async _ => await DeleteSelectedCaptureAsync(), _ => SelectedCapture is not null && !IsBusy);
+        DeleteCaptureCommand = new RelayCommand(
+            async parameter => await DeleteCaptureAsync(parameter as CaptureListItemViewModel),
+            parameter => parameter is CaptureListItemViewModel && !IsBusy);
+        PurgeRecentCapturesCommand = new RelayCommand(async _ => await PurgeRecentCapturesAsync(), _ => Captures.Count > 0 && !IsBusy);
         AssignProjectCommand = new RelayCommand(async _ => await AssignSelectedCaptureToProjectAsync(), _ => SelectedCapture is not null);
         AssignUserCommand = new RelayCommand(async _ => await AssignSelectedCaptureToUserAsync(), _ => SelectedCapture is not null);
         SaveNoteCommand = new RelayCommand(async _ => await PersistSelectedCaptureMetadataAsync(), _ => SelectedCapture is not null);
@@ -836,19 +838,19 @@ public sealed class MainViewModel : ObservableObject
         return false;
     }
 
-    private void DeleteSelectedCapture()
+    private async Task DeleteSelectedCaptureAsync()
     {
         if (SelectedCapture is null)
         {
             return;
         }
 
-        DeleteCapture(SelectedCapture);
+        await DeleteCaptureAsync(SelectedCapture);
     }
 
-    private void DeleteCapture(CaptureListItemViewModel? toDelete)
+    private async Task DeleteCaptureAsync(CaptureListItemViewModel? toDelete)
     {
-        if (toDelete is null)
+        if (toDelete is null || IsBusy)
         {
             return;
         }
@@ -865,28 +867,26 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        var captureDirectory = toDelete.CaptureDirectory ?? string.Empty;
+        var mediaPath = toDelete.MediaPath ?? string.Empty;
+        var jsonPath = toDelete.Record.Metadata.JsonPath ?? string.Empty;
+        var project = toDelete.Record.Metadata.Project;
+
+        SetBusyState(true, "Deleting capture...");
         try
         {
-            if (!string.IsNullOrWhiteSpace(toDelete.CaptureDirectory) && Directory.Exists(toDelete.CaptureDirectory))
+            var (success, error) = await Task.Run(() => DeleteCaptureFiles(captureDirectory, mediaPath, jsonPath));
+            if (!success)
             {
-                _ = DataBackupService.TryBackupDirectory(toDelete.CaptureDirectory, "captures", Path.GetFileName(toDelete.CaptureDirectory));
-            }
-
-            if (!string.IsNullOrWhiteSpace(toDelete.CaptureDirectory) && Directory.Exists(toDelete.CaptureDirectory))
-            {
-                Directory.Delete(toDelete.CaptureDirectory, recursive: true);
-            }
-            else
-            {
-                if (File.Exists(toDelete.MediaPath))
+                StatusText = $"Delete failed: {error}";
+                AppLogService.Error("Capture.Delete.Failed", "Capture delete failed.", null, new
                 {
-                    File.Delete(toDelete.MediaPath);
-                }
-
-                if (File.Exists(toDelete.Record.Metadata.JsonPath))
-                {
-                    File.Delete(toDelete.Record.Metadata.JsonPath);
-                }
+                    project,
+                    captureDirectory,
+                    jsonPath,
+                    Error = error
+                });
+                return;
             }
 
             Captures.Remove(toDelete);
@@ -900,9 +900,9 @@ public sealed class MainViewModel : ObservableObject
             StatusText = "Capture deleted.";
             AppLogService.Info("Capture.Delete", "Capture deleted from latest captures.", new
             {
-                toDelete.Record.Metadata.Project,
-                toDelete.Record.Metadata.CaptureDirectory,
-                toDelete.Record.Metadata.JsonPath
+                project,
+                captureDirectory,
+                jsonPath
             });
         }
         catch (Exception ex)
@@ -910,16 +910,20 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Delete failed: {ex.Message}";
             AppLogService.Error("Capture.Delete.Failed", "Capture delete failed.", ex, new
             {
-                toDelete.Record.Metadata.Project,
-                toDelete.Record.Metadata.CaptureDirectory,
-                toDelete.Record.Metadata.JsonPath
+                project,
+                captureDirectory,
+                jsonPath
             });
+        }
+        finally
+        {
+            SetBusyState(false);
         }
     }
 
-    private void PurgeRecentCaptures()
+    private async Task PurgeRecentCapturesAsync()
     {
-        if (Captures.Count == 0)
+        if (Captures.Count == 0 || IsBusy)
         {
             return;
         }
@@ -936,50 +940,107 @@ public sealed class MainViewModel : ObservableObject
         }
 
         var snapshot = Captures.ToList();
+        var jobs = snapshot
+            .Select(item => new CaptureDeleteJob(
+                item,
+                item.CaptureDirectory ?? string.Empty,
+                item.MediaPath ?? string.Empty,
+                item.Record.Metadata.JsonPath ?? string.Empty))
+            .ToList();
+
+        SetBusyState(true, $"Purging recent captures... 0/{jobs.Count:n0}");
+        try
+        {
+            var progress = new Progress<(int processed, int total, int deleted, int failed)>(value =>
+            {
+                StatusText = $"Purging recent captures... {value.processed:n0}/{value.total:n0} (deleted {value.deleted:n0}, failed {value.failed:n0})";
+            });
+
+            var result = await Task.Run(() => PurgeCaptureJobs(jobs, progress));
+
+            foreach (var deletedItem in result.deletedItems)
+            {
+                Captures.Remove(deletedItem);
+            }
+
+            RebuildProjectCollections();
+            RefreshFilter();
+            SelectedCapture = CaptureView.Cast<CaptureListItemViewModel>().FirstOrDefault();
+            StatusText = result.failed == 0
+                ? $"Purged {result.deleted} recent capture(s)."
+                : $"Purged {result.deleted} recent capture(s), {result.failed} failed.";
+            AppLogService.Info("Capture.PurgeRecent", "Purged recent captures.", new
+            {
+                Deleted = result.deleted,
+                Failed = result.failed
+            });
+        }
+        finally
+        {
+            SetBusyState(false);
+        }
+    }
+
+    private static (bool success, string error) DeleteCaptureFiles(string captureDirectory, string mediaPath, string jsonPath)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(captureDirectory) && Directory.Exists(captureDirectory))
+            {
+                _ = DataBackupService.TryBackupDirectory(captureDirectory, "captures", Path.GetFileName(captureDirectory));
+                Directory.Delete(captureDirectory, recursive: true);
+                return (true, string.Empty);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mediaPath) && File.Exists(mediaPath))
+            {
+                File.Delete(mediaPath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(jsonPath) && File.Exists(jsonPath))
+            {
+                File.Delete(jsonPath);
+            }
+
+            return (true, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private static (int deleted, int failed, List<CaptureListItemViewModel> deletedItems) PurgeCaptureJobs(
+        IReadOnlyList<CaptureDeleteJob> jobs,
+        IProgress<(int processed, int total, int deleted, int failed)>? progress)
+    {
+        var deletedItems = new List<CaptureListItemViewModel>(jobs.Count);
         var deleted = 0;
         var failed = 0;
-        foreach (var item in snapshot)
+        var processed = 0;
+        var total = jobs.Count;
+
+        foreach (var job in jobs)
         {
-            try
+            var (success, _) = DeleteCaptureFiles(job.CaptureDirectory, job.MediaPath, job.JsonPath);
+            if (success)
             {
-                if (!string.IsNullOrWhiteSpace(item.CaptureDirectory) && Directory.Exists(item.CaptureDirectory))
-                {
-                    _ = DataBackupService.TryBackupDirectory(item.CaptureDirectory, "captures", Path.GetFileName(item.CaptureDirectory));
-                    Directory.Delete(item.CaptureDirectory, recursive: true);
-                }
-                else
-                {
-                    if (File.Exists(item.MediaPath))
-                    {
-                        File.Delete(item.MediaPath);
-                    }
-
-                    if (File.Exists(item.Record.Metadata.JsonPath))
-                    {
-                        File.Delete(item.Record.Metadata.JsonPath);
-                    }
-                }
-
-                Captures.Remove(item);
                 deleted++;
+                deletedItems.Add(job.Item);
             }
-            catch
+            else
             {
                 failed++;
             }
+
+            processed++;
+            if (processed == total || processed % 12 == 0)
+            {
+                progress?.Report((processed, total, deleted, failed));
+            }
         }
 
-        RebuildProjectCollections();
-        RefreshFilter();
-        SelectedCapture = CaptureView.Cast<CaptureListItemViewModel>().FirstOrDefault();
-        StatusText = failed == 0
-            ? $"Purged {deleted} recent capture(s)."
-            : $"Purged {deleted} recent capture(s), {failed} failed.";
-        AppLogService.Info("Capture.PurgeRecent", "Purged recent captures.", new
-        {
-            Deleted = deleted,
-            Failed = failed
-        });
+        return (deleted, failed, deletedItems);
     }
 
     private async Task AssignSelectedCaptureToProjectAsync()
@@ -1198,6 +1259,12 @@ public sealed class MainViewModel : ObservableObject
         return candidate;
     }
 
+    private sealed record CaptureDeleteJob(
+        CaptureListItemViewModel Item,
+        string CaptureDirectory,
+        string MediaPath,
+        string JsonPath);
+
     private void RefreshFilter()
     {
         CaptureView.Refresh();
@@ -1220,6 +1287,7 @@ public sealed class MainViewModel : ObservableObject
         (RefreshCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (OpenInExplorerCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (DeleteSelectedCaptureCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (DeleteCaptureCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (PurgeRecentCapturesCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (AssignProjectCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (AssignUserCommand as RelayCommand)?.RaiseCanExecuteChanged();

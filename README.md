@@ -100,7 +100,7 @@ On first launch, Settings opens.
   - `<StorageRoot>\Revie\taxonomy.json`
   - This lets other machines using the same storage root load the same project/user lists.
 - Settings now shows the running app build version in the top-right.
-  - Build revision is stamped automatically at compile time (`1.0.4+build.yyyyMMdd-HHmmss`).
+  - Build revision is stamped automatically at compile time (`1.0.5+build.yyyyMMdd-HHmmss`).
 
 ## Hotkeys (Default)
 
