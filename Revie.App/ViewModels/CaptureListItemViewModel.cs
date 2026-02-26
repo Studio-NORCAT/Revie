@@ -11,6 +11,7 @@ public sealed class CaptureListItemViewModel : ObservableObject
     private static readonly ImageSource EmptyImageSource = new BitmapImage();
     private ImageSource? _thumbnail;
     private ImageSource? _previewImage;
+    private string _previewOverridePath = string.Empty;
     private string _note;
     private string _project;
     private string _reviewState;
@@ -194,6 +195,19 @@ public sealed class CaptureListItemViewModel : ObservableObject
         OnPropertyChanged(nameof(PreviewImage));
     }
 
+    public void SetPreviewOverridePath(string? path)
+    {
+        var normalized = (path ?? string.Empty).Trim();
+        if (string.Equals(_previewOverridePath, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _previewOverridePath = normalized;
+        _previewImage = null;
+        OnPropertyChanged(nameof(PreviewImage));
+    }
+
     private string GetPreviewPath()
     {
         if (IsVideo)
@@ -205,6 +219,11 @@ public sealed class CaptureListItemViewModel : ObservableObject
             }
 
             return string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_previewOverridePath) && File.Exists(_previewOverridePath))
+        {
+            return _previewOverridePath;
         }
 
         return Record.ImagePath;

@@ -71,7 +71,12 @@ public sealed class SessionBrowseService
                 var defaultStart = Directory.GetCreationTime(folder);
                 var defaultEnd = Directory.GetLastWriteTime(folder);
                 var defaultName = Path.GetFileName(folder);
-                var defaultCount = CountCaptureFolders(folder);
+                var sessionRecords = GetSessionCaptures(folder)
+                    .Where(HasValidMediaFile)
+                    .ToArray();
+                var defaultCount = sessionRecords.Length;
+                var sessionReviewState = DetermineSessionReviewState(sessionRecords);
+                var hasRevisedUploads = sessionRecords.Any(record => HasUploadedRevisions(record.Metadata));
                 var sessionUsers = new List<string>();
                 var previewImagePath = string.Empty;
 
@@ -93,7 +98,9 @@ public sealed class SessionBrowseService
                         EndLocal = defaultEnd,
                         FolderPath = folder,
                         CaptureCount = defaultCount,
-                        PreviewImagePath = previewImagePath
+                        PreviewImagePath = previewImagePath,
+                        ReviewState = sessionReviewState,
+                        HasRevisedUploads = hasRevisedUploads
                     });
                     continue;
                 }
@@ -140,7 +147,16 @@ public sealed class SessionBrowseService
 
                 if (sessionUsers.Count == 0)
                 {
-                    sessionUsers = CollectSessionUsers(folder);
+                    sessionUsers = sessionRecords
+                        .SelectMany(record => record.Metadata.AssignedUsers)
+                        .Where(user => !string.IsNullOrWhiteSpace(user))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(user => user, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    if (sessionUsers.Count == 0)
+                    {
+                        sessionUsers = CollectSessionUsers(folder);
+                    }
                 }
 
                 if (string.IsNullOrWhiteSpace(previewImagePath))
@@ -163,7 +179,9 @@ public sealed class SessionBrowseService
                     EndLocal = end,
                     FolderPath = folder,
                     CaptureCount = captureCount,
-                    PreviewImagePath = previewImagePath
+                    PreviewImagePath = previewImagePath,
+                    ReviewState = sessionReviewState,
+                    HasRevisedUploads = hasRevisedUploads
                 });
             }
             catch (Exception ex)
@@ -378,13 +396,77 @@ public sealed class SessionBrowseService
                 EndLocal = Directory.GetLastWriteTime(folder),
                 FolderPath = folder,
                 CaptureCount = CountCaptureFolders(folder),
-                PreviewImagePath = FindSessionPreviewImagePath(folder)
+                PreviewImagePath = FindSessionPreviewImagePath(folder),
+                ReviewState = ReviewState.None,
+                HasRevisedUploads = false
             };
         }
         catch
         {
             return null;
         }
+    }
+
+    private static string DetermineSessionReviewState(IReadOnlyCollection<CaptureRecord> records)
+    {
+        if (records.Count == 0)
+        {
+            return ReviewState.None;
+        }
+
+        var completedCount = records.Count(record =>
+            string.Equals(
+                ReviewState.Normalize(record.Metadata.ReviewState),
+                ReviewState.Completed,
+                StringComparison.OrdinalIgnoreCase));
+        if (completedCount == records.Count)
+        {
+            return ReviewState.Completed;
+        }
+
+        var inReviewCount = records.Count(record =>
+            string.Equals(
+                ReviewState.Normalize(record.Metadata.ReviewState),
+                ReviewState.InReview,
+                StringComparison.OrdinalIgnoreCase));
+        return inReviewCount > 0 || completedCount > 0
+            ? ReviewState.InReview
+            : ReviewState.None;
+    }
+
+    private static bool HasUploadedRevisions(CaptureMetadata metadata)
+    {
+        var uploadedPaths = metadata.UploadedImagePaths ?? new List<string>();
+        if (uploadedPaths.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var uploadedPath in uploadedPaths)
+        {
+            var normalized = (uploadedPath ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                continue;
+            }
+
+            try
+            {
+                var absolutePath = Path.IsPathRooted(normalized)
+                    ? Path.GetFullPath(normalized)
+                    : Path.GetFullPath(Path.Combine(metadata.CaptureDirectory ?? string.Empty, normalized.Replace('/', Path.DirectorySeparatorChar)));
+                if (File.Exists(absolutePath))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore malformed paths.
+            }
+        }
+
+        return false;
     }
 
     private static bool HasValidMediaFile(CaptureRecord record)

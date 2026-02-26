@@ -21,7 +21,6 @@ public partial class OverlayWindow : Window
     private HwndSource? _hwndSource;
     private IntPtr _windowHandle;
     private bool _isDrawingMode;
-    private bool _suppressToolbar;
     private PenSizeSettings _penSizeSettings;
 
     public OverlayWindow(PenSizeSettings penSizeSettings)
@@ -107,15 +106,12 @@ public partial class OverlayWindow : Window
 
     public IDisposable SuppressToolbarForCapture()
     {
-        var previous = _suppressToolbar;
         var previousOpacity = Opacity;
         var previousHitTest = IsHitTestVisible;
-        _suppressToolbar = true;
         Opacity = 0;
         IsHitTestVisible = false;
-        ApplyToolbarVisibility();
         UpdateLayout();
-        return new ToolbarSuppression(this, previous, previousOpacity, previousHitTest);
+        return new ToolbarSuppression(this, previousOpacity, previousHitTest);
     }
 
     public void ApplyPenSizeSettings(PenSizeSettings settings)
@@ -203,10 +199,7 @@ public partial class OverlayWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             ApplyVirtualScreenBounds();
-            if (_isDrawingMode)
-            {
-                PositionToolbarAtTopLeft();
-            }
+            EnsureToolbarWithinBounds();
         }));
     }
 
@@ -252,16 +245,9 @@ public partial class OverlayWindow : Window
 
     private void ApplyToolbarVisibility()
     {
-        var shouldShowToolbar = _isDrawingMode && !_suppressToolbar;
+        var shouldShowToolbar = _isDrawingMode;
         ToolbarRoot.Visibility = shouldShowToolbar ? Visibility.Visible : Visibility.Collapsed;
         UpdateToolbarConstraints();
-
-        if (shouldShowToolbar)
-        {
-            PositionToolbarAtTopLeft();
-            return;
-        }
-
         EnsureToolbarWithinBounds();
     }
 
@@ -374,19 +360,16 @@ public partial class OverlayWindow : Window
     private sealed class ToolbarSuppression : IDisposable
     {
         private readonly OverlayWindow _owner;
-        private readonly bool _previousValue;
         private readonly double _previousOpacity;
         private readonly bool _previousHitTestVisible;
         private bool _disposed;
 
         public ToolbarSuppression(
             OverlayWindow owner,
-            bool previousValue,
             double previousOpacity,
             bool previousHitTestVisible)
         {
             _owner = owner;
-            _previousValue = previousValue;
             _previousOpacity = previousOpacity;
             _previousHitTestVisible = previousHitTestVisible;
         }
@@ -399,10 +382,8 @@ public partial class OverlayWindow : Window
             }
 
             _disposed = true;
-            _owner._suppressToolbar = _previousValue;
             _owner.Opacity = _previousOpacity;
             _owner.IsHitTestVisible = _previousHitTestVisible;
-            _owner.ApplyToolbarVisibility();
             _owner.UpdateLayout();
         }
     }

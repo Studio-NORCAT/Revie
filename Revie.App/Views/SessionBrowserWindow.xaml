@@ -239,6 +239,68 @@
             </Setter>
         </Style>
 
+        <Style x:Key="CaptureCompareTabToggleStyle" TargetType="ToggleButton">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="MinWidth" Value="128" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#E8E8E8" />
+            <Setter Property="Background" Value="#1F1F1F" />
+            <Setter Property="BorderBrush" Value="#3A3A3A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Root"
+                                CornerRadius="7"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#2C2C2C" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#353535" />
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#7B7B7B" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="UploadVariantItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Foreground" Value="#F0F0F0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Root"
+                                Background="#1A1A1A"
+                                BorderBrush="#333333"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#242424" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#2E2E2E" />
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#6E6E6E" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="VideoSeekSliderStyle" TargetType="Slider">
             <Setter Property="Height" Value="20" />
             <Setter Property="Foreground" Value="#9C9C9C" />
@@ -486,6 +548,15 @@
                                     <Separator />
                                     <MenuItem Header="Add User Tag" Tag="sessionUserRoot" />
                                     <MenuItem Header="Clear User Tags" Click="ClearSessionUsersFromContextMenu_OnClick" />
+                                    <Separator />
+                                    <MenuItem Header="Set Review State">
+                                        <MenuItem Header="In Review"
+                                                  Click="SetSessionReviewStateInReview_OnClick" />
+                                        <MenuItem Header="Completed"
+                                                  Click="SetSessionReviewStateCompleted_OnClick" />
+                                        <MenuItem Header="Clear State"
+                                                  Click="ClearSessionReviewState_OnClick" />
+                                    </MenuItem>
                                 </ContextMenu>
                             </ListBox.ContextMenu>
                             <ListBox.Style>
@@ -520,6 +591,21 @@
                                             <Grid>
                                                 <Image Stretch="UniformToFill"
                                                        Source="{Binding PreviewImagePath, IsAsync=True}" />
+                                                <Border HorizontalAlignment="Right"
+                                                        VerticalAlignment="Bottom"
+                                                        Margin="0,0,4,4"
+                                                        Padding="4,1"
+                                                        Background="#C10F0F0F"
+                                                        BorderBrush="#4D8EA6"
+                                                        BorderThickness="1"
+                                                        CornerRadius="4"
+                                                        Visibility="{Binding HasRevisedUploads, Converter={StaticResource BoolToVisibility}}"
+                                                        ToolTip="Has revised uploads">
+                                                    <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="10"
+                                                               Foreground="#CFEFFF"
+                                                               Text="&#xE7C3;" />
+                                                </Border>
                                                 <Border Background="#A00F0F0F">
                                                     <Border.Style>
                                                         <Style TargetType="Border">
@@ -541,11 +627,27 @@
                                         </Border>
 
                                         <StackPanel Grid.Column="2">
-                                            <TextBlock FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Foreground="#FFFFFF"
-                                                       Text="{Binding SessionName}"
-                                                       TextTrimming="CharacterEllipsis" />
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock FontSize="14"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#FFFFFF"
+                                                           Text="{Binding SessionName}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <Border Width="10"
+                                                        Height="10"
+                                                        Margin="8,5,0,0"
+                                                        CornerRadius="5"
+                                                        Visibility="{Binding IsInReview, Converter={StaticResource BoolToVisibility}}"
+                                                        Background="#D6B44D"
+                                                        ToolTip="In Review" />
+                                                <Border Width="10"
+                                                        Height="10"
+                                                        Margin="6,5,0,0"
+                                                        CornerRadius="5"
+                                                        Visibility="{Binding IsCompleted, Converter={StaticResource BoolToVisibility}}"
+                                                        Background="#48BB6A"
+                                                        ToolTip="Completed" />
+                                            </StackPanel>
                                             <WrapPanel Margin="0,7,0,0">
                                                 <Border Style="{StaticResource MetadataChipStyle}">
                                                     <TextBlock FontSize="11"
@@ -874,140 +976,242 @@
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="8">
-                                <Grid x:Name="SessionPreviewContentGrid"
-                                      MouseMove="SessionPreviewContentGrid_OnMouseMove"
-                                      MouseLeave="SessionPreviewContentGrid_OnMouseLeave">
-                                    <ScrollViewer x:Name="SessionPreviewScrollViewer"
-                                                  HorizontalScrollBarVisibility="Hidden"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  CanContentScroll="False"
-                                                  HorizontalContentAlignment="Center"
-                                                  VerticalContentAlignment="Center"
-                                                  PreviewMouseWheel="SessionPreviewScrollViewer_OnPreviewMouseWheel"
-                                                  PreviewMouseLeftButtonDown="SessionPreviewScrollViewer_OnMouseLeftButtonDown"
-                                                  PreviewMouseMove="SessionPreviewScrollViewer_OnMouseMove"
-                                                  PreviewMouseLeftButtonUp="SessionPreviewScrollViewer_OnMouseLeftButtonUp"
-                                                  MouseLeave="SessionPreviewScrollViewer_OnMouseLeave"
-                                                  SizeChanged="SessionPreviewScrollViewer_OnSizeChanged">
-                                        <ScrollViewer.Style>
-                                            <Style TargetType="ScrollViewer">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelectedCaptureVideo}" Value="True">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ScrollViewer.Style>
-                                        <Grid Background="Transparent">
-                                            <Image x:Name="SessionPreviewImage"
-                                                   Source="{Binding SelectedCapture.PreviewImage, IsAsync=True}"
-                                                   Stretch="None"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center">
-                                                <Image.LayoutTransform>
-                                                    <ScaleTransform ScaleX="{Binding PreviewScale}" ScaleY="{Binding PreviewScale}" />
-                                                </Image.LayoutTransform>
-                                            </Image>
-                                        </Grid>
-                                    </ScrollViewer>
+		                                <Grid x:Name="SessionPreviewContentGrid"
+		                                      MouseMove="SessionPreviewContentGrid_OnMouseMove"
+		                                      MouseLeave="SessionPreviewContentGrid_OnMouseLeave">
+		                                    <Grid.RowDefinitions>
+		                                        <RowDefinition Height="Auto" />
+		                                        <RowDefinition Height="*" />
+		                                        <RowDefinition Height="Auto" />
+		                                    </Grid.RowDefinitions>
 
-                                    <Border Background="Transparent">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelectedCaptureVideo}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                        <MediaElement x:Name="SessionVideoPreviewElement"
-                                                      LoadedBehavior="Manual"
-                                                      UnloadedBehavior="Manual"
-                                                      ScrubbingEnabled="True"
-                                                      Stretch="Uniform"
-                                                      MediaOpened="SessionVideoPreviewElement_OnMediaOpened"
-                                                      MediaEnded="SessionVideoPreviewElement_OnMediaEnded"
-                                                      MediaFailed="SessionVideoPreviewElement_OnMediaFailed" />
-                                    </Border>
+	                                    <Border Grid.Row="0"
+	                                            Margin="0,0,0,8"
+	                                            Padding="6"
+	                                            Background="#121212"
+	                                            BorderBrush="{StaticResource BorderBrush}"
+	                                            BorderThickness="1"
+	                                            CornerRadius="7"
+	                                            Visibility="{Binding CanManageCaptureUploads, Converter={StaticResource BoolToVisibility}}">
+	                                        <StackPanel Orientation="Horizontal">
+	                                            <ToggleButton Style="{StaticResource CaptureCompareTabToggleStyle}"
+	                                                          Content="Review"
+	                                                          IsChecked="{Binding IsReviewCompareTabActive, Mode=TwoWay}" />
+	                                            <ToggleButton Style="{StaticResource CaptureCompareTabToggleStyle}"
+	                                                          Margin="0"
+	                                                          Content="Revised Upload"
+	                                                          IsChecked="{Binding IsRevisedUploadTabActive, Mode=TwoWay}" />
+	                                        </StackPanel>
+	                                    </Border>
 
-                                    <Border x:Name="SessionVideoToolbarBorder"
-                                            Visibility="{Binding IsSelectedCaptureVideo, Converter={StaticResource BoolToVisibility}}"
-                                            VerticalAlignment="Bottom"
-                                            Margin="10"
-                                            Padding="10,8"
-                                            Background="#B8141414"
-                                            BorderBrush="#3A3A3A"
-                                            BorderThickness="1"
-                                            CornerRadius="8"
-                                            Opacity="1"
-                                            MouseEnter="SessionVideoToolbarBorder_OnMouseEnter"
-                                            MouseLeave="SessionVideoToolbarBorder_OnMouseLeave">
-                                        <StackPanel>
-                                            <Slider x:Name="SessionVideoSeekSlider"
-                                                    Style="{StaticResource VideoSeekSliderStyle}"
-                                                    Minimum="0"
-                                                    Maximum="1"
-                                                    Value="0"
-                                                    ValueChanged="SessionVideoSeekSlider_OnValueChanged"
-                                                    PreviewMouseLeftButtonDown="SessionVideoSeekSlider_OnPreviewMouseLeftButtonDown"
-                                                    PreviewMouseLeftButtonUp="SessionVideoSeekSlider_OnPreviewMouseLeftButtonUp"
-                                                    LostMouseCapture="SessionVideoSeekSlider_OnLostMouseCapture" />
-                                            <Grid Margin="0,2,0,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock x:Name="SessionVideoTimeTextBlock"
-                                                           Grid.Column="0"
-                                                           VerticalAlignment="Center"
-                                                           Foreground="#D8D8D8"
-                                                           FontSize="12"
-                                                           Text="00:00 / 00:00" />
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
-                                                            Margin="0,0,8,0"
-                                                            Content="&#xE768;"
-                                                            ToolTip="Play"
-                                                            Click="SessionVideoPlayButton_OnClick" />
-                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
-                                                            Margin="0,0,8,0"
-                                                            Content="&#xE769;"
-                                                            ToolTip="Pause"
-                                                            Click="SessionVideoPauseButton_OnClick" />
-                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
-                                                            Margin="0,0,8,0"
-                                                            Content="&#xE71A;"
-                                                            ToolTip="Stop"
-                                                            Click="SessionVideoStopButton_OnClick" />
-                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
-                                                            Content="&#xE777;"
-                                                            ToolTip="Restart"
-                                                            Click="SessionVideoRestartButton_OnClick" />
-                                                </StackPanel>
-                                                <Button x:Name="SessionVideoFullscreenButton"
-                                                        Grid.Column="2"
-                                                        Style="{StaticResource VideoTransportButtonStyle}"
-                                                        Content="&#xE740;"
-                                                        ToolTip="Fullscreen preview"
-                                                        Click="SessionVideoFullscreenButton_OnClick" />
-                                            </Grid>
-                                        </StackPanel>
-                                    </Border>
+		                                    <Border Grid.Row="1"
+		                                            Margin="0,0,0,10"
+		                                            Background="#101010"
+		                                            BorderBrush="#2F2F2F"
+		                                            BorderThickness="1"
+		                                            CornerRadius="8"
+		                                            Padding="2">
+		                                        <Border.Style>
+		                                            <Style TargetType="Border">
+		                                                <Setter Property="Visibility" Value="Visible" />
+		                                                <Style.Triggers>
+		                                                    <DataTrigger Binding="{Binding IsSelectedCaptureVideo}" Value="True">
+		                                                        <Setter Property="Visibility" Value="Collapsed" />
+		                                                    </DataTrigger>
+		                                                </Style.Triggers>
+		                                            </Style>
+		                                        </Border.Style>
+		                                        <ScrollViewer x:Name="SessionPreviewScrollViewer"
+		                                                      HorizontalScrollBarVisibility="Hidden"
+		                                                      VerticalScrollBarVisibility="Auto"
+		                                                      CanContentScroll="False"
+		                                                      HorizontalContentAlignment="Center"
+		                                                      VerticalContentAlignment="Center"
+		                                                      PreviewMouseWheel="SessionPreviewScrollViewer_OnPreviewMouseWheel"
+		                                                      PreviewMouseLeftButtonDown="SessionPreviewScrollViewer_OnMouseLeftButtonDown"
+		                                                      PreviewMouseMove="SessionPreviewScrollViewer_OnMouseMove"
+		                                                      PreviewMouseLeftButtonUp="SessionPreviewScrollViewer_OnMouseLeftButtonUp"
+		                                                      MouseLeave="SessionPreviewScrollViewer_OnMouseLeave"
+		                                                      SizeChanged="SessionPreviewScrollViewer_OnSizeChanged">
+		                                            <Grid Background="Transparent">
+		                                                <Image x:Name="SessionPreviewImage"
+		                                                       Source="{Binding SelectedCapture.PreviewImage, IsAsync=True}"
+		                                                       Stretch="None"
+		                                                       HorizontalAlignment="Center"
+		                                                       VerticalAlignment="Center">
+		                                                    <Image.LayoutTransform>
+		                                                        <ScaleTransform ScaleX="{Binding PreviewScale}" ScaleY="{Binding PreviewScale}" />
+		                                                    </Image.LayoutTransform>
+		                                                </Image>
+		                                            </Grid>
+		                                        </ScrollViewer>
+		                                    </Border>
 
-                                    <Border Background="#780F0F0F"
-                                            CornerRadius="8"
-                                            Visibility="{Binding EmptyRightPaneVisible, Converter={StaticResource BoolToVisibility}}">
-                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <TextBlock FontSize="18" FontWeight="SemiBold" Foreground="#E6E6E6" Text="Nothing selected" HorizontalAlignment="Center" />
-                                            <TextBlock Margin="0,6,0,0" Foreground="#BDBDBD" Text="{Binding EmptyRightPaneMessage}" HorizontalAlignment="Center" />
-                                        </StackPanel>
-                                    </Border>
-                                </Grid>
-                            </Border>
+		                                    <Border Grid.Row="2"
+		                                            Margin="0,0,0,4"
+		                                            Padding="8"
+		                                            Background="#121212"
+		                                            BorderBrush="{StaticResource BorderBrush}"
+	                                            BorderThickness="1"
+	                                            CornerRadius="7"
+	                                            AllowDrop="True"
+	                                            DragOver="CaptureUploadDropZone_OnDragOver"
+	                                            Drop="CaptureUploadDropZone_OnDrop">
+	                                        <Border.Style>
+	                                            <Style TargetType="Border">
+	                                                <Setter Property="Visibility" Value="Collapsed" />
+	                                                <Style.Triggers>
+	                                                    <MultiDataTrigger>
+	                                                        <MultiDataTrigger.Conditions>
+	                                                            <Condition Binding="{Binding CanManageCaptureUploads}" Value="True" />
+	                                                            <Condition Binding="{Binding IsRevisedUploadTabActive}" Value="True" />
+	                                                        </MultiDataTrigger.Conditions>
+	                                                        <Setter Property="Visibility" Value="Visible" />
+	                                                    </MultiDataTrigger>
+	                                                </Style.Triggers>
+	                                            </Style>
+	                                        </Border.Style>
+		                                            <Grid>
+		                                                <Grid.RowDefinitions>
+		                                                    <RowDefinition Height="Auto" />
+		                                                    <RowDefinition Height="Auto" />
+		                                                    <RowDefinition Height="Auto" />
+		                                                </Grid.RowDefinitions>
+		                                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,4">
+		                                                <TextBlock VerticalAlignment="Center"
+		                                                           Foreground="#CFCFCF"
+		                                                           Text="{Binding CaptureUploadHintText}" />
+		                                                <Button MinWidth="112"
+		                                                        Margin="12,0,0,0"
+		                                                        Padding="12,6"
+		                                                        Content="Upload"
+		                                                        Click="UploadCaptureImagesButton_OnClick" />
+		                                            </StackPanel>
+		                                            <TextBlock Grid.Row="1"
+		                                                       Margin="0,8,0,6"
+		                                                       FontSize="11"
+		                                                       Foreground="{StaticResource MutedBrush}"
+		                                                       Text="Uploaded revisions" />
+		                                            <ListBox Grid.Row="2"
+		                                                     Height="88"
+		                                                     Padding="6"
+		                                                     Background="#131313"
+		                                                     BorderBrush="#353535"
+		                                                     BorderThickness="1"
+		                                                     Foreground="#EFEFEF"
+		                                                     ItemsSource="{Binding UploadedCapturePreviewVariants}"
+		                                                     SelectedItem="{Binding SelectedUploadedCapturePreviewVariant, Mode=TwoWay}"
+		                                                     ItemContainerStyle="{StaticResource UploadVariantItemStyle}"
+		                                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+		                                                <ListBox.ItemTemplate>
+		                                                    <DataTemplate>
+		                                                        <TextBlock Text="{Binding Label}"
+		                                                                   Foreground="#F0F0F0"
+		                                                                   TextTrimming="CharacterEllipsis" />
+		                                                    </DataTemplate>
+		                                                </ListBox.ItemTemplate>
+		                                            </ListBox>
+		                                        </Grid>
+		                                    </Border>
+
+		                                    <Border Grid.Row="1" Background="Transparent">
+		                                        <Border.Style>
+		                                            <Style TargetType="Border">
+		                                                <Setter Property="Visibility" Value="Collapsed" />
+	                                                <Style.Triggers>
+	                                                    <DataTrigger Binding="{Binding IsSelectedCaptureVideo}" Value="True">
+	                                                        <Setter Property="Visibility" Value="Visible" />
+	                                                    </DataTrigger>
+	                                                </Style.Triggers>
+	                                            </Style>
+	                                        </Border.Style>
+		                                        <MediaElement x:Name="SessionVideoPreviewElement"
+		                                                      LoadedBehavior="Manual"
+		                                                      UnloadedBehavior="Manual"
+	                                                      ScrubbingEnabled="True"
+	                                                      Stretch="Uniform"
+	                                                      MediaOpened="SessionVideoPreviewElement_OnMediaOpened"
+	                                                      MediaEnded="SessionVideoPreviewElement_OnMediaEnded"
+	                                                      MediaFailed="SessionVideoPreviewElement_OnMediaFailed" />
+	                                    </Border>
+
+		                                    <Border x:Name="SessionVideoToolbarBorder"
+		                                            Grid.Row="1"
+		                                            Visibility="{Binding IsSelectedCaptureVideo, Converter={StaticResource BoolToVisibility}}"
+	                                            VerticalAlignment="Bottom"
+	                                            Margin="10"
+	                                            Padding="10,8"
+	                                            Background="#B8141414"
+	                                            BorderBrush="#3A3A3A"
+	                                            BorderThickness="1"
+	                                            CornerRadius="8"
+	                                            Opacity="1"
+	                                            MouseEnter="SessionVideoToolbarBorder_OnMouseEnter"
+	                                            MouseLeave="SessionVideoToolbarBorder_OnMouseLeave">
+	                                        <StackPanel>
+	                                            <Slider x:Name="SessionVideoSeekSlider"
+	                                                    Style="{StaticResource VideoSeekSliderStyle}"
+	                                                    Minimum="0"
+	                                                    Maximum="1"
+	                                                    Value="0"
+	                                                    ValueChanged="SessionVideoSeekSlider_OnValueChanged"
+	                                                    PreviewMouseLeftButtonDown="SessionVideoSeekSlider_OnPreviewMouseLeftButtonDown"
+	                                                    PreviewMouseLeftButtonUp="SessionVideoSeekSlider_OnPreviewMouseLeftButtonUp"
+	                                                    LostMouseCapture="SessionVideoSeekSlider_OnLostMouseCapture" />
+	                                            <Grid Margin="0,2,0,0">
+	                                                <Grid.ColumnDefinitions>
+	                                                    <ColumnDefinition Width="Auto" />
+	                                                    <ColumnDefinition Width="*" />
+	                                                    <ColumnDefinition Width="Auto" />
+	                                                </Grid.ColumnDefinitions>
+	                                                <TextBlock x:Name="SessionVideoTimeTextBlock"
+	                                                           Grid.Column="0"
+	                                                           VerticalAlignment="Center"
+	                                                           Foreground="#D8D8D8"
+	                                                           FontSize="12"
+	                                                           Text="00:00 / 00:00" />
+	                                                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+	                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
+	                                                            Margin="0,0,8,0"
+	                                                            Content="&#xE768;"
+	                                                            ToolTip="Play"
+	                                                            Click="SessionVideoPlayButton_OnClick" />
+	                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
+	                                                            Margin="0,0,8,0"
+	                                                            Content="&#xE769;"
+	                                                            ToolTip="Pause"
+	                                                            Click="SessionVideoPauseButton_OnClick" />
+	                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
+	                                                            Margin="0,0,8,0"
+	                                                            Content="&#xE71A;"
+	                                                            ToolTip="Stop"
+	                                                            Click="SessionVideoStopButton_OnClick" />
+	                                                    <Button Style="{StaticResource VideoTransportButtonStyle}"
+	                                                            Content="&#xE777;"
+	                                                            ToolTip="Restart"
+	                                                            Click="SessionVideoRestartButton_OnClick" />
+	                                                </StackPanel>
+	                                                <Button x:Name="SessionVideoFullscreenButton"
+	                                                        Grid.Column="2"
+	                                                        Style="{StaticResource VideoTransportButtonStyle}"
+	                                                        Content="&#xE740;"
+	                                                        ToolTip="Fullscreen preview"
+	                                                        Click="SessionVideoFullscreenButton_OnClick" />
+	                                            </Grid>
+	                                        </StackPanel>
+	                                    </Border>
+
+		                                    <Border Grid.Row="1"
+		                                            Background="#780F0F0F"
+	                                            CornerRadius="8"
+	                                            Visibility="{Binding EmptyRightPaneVisible, Converter={StaticResource BoolToVisibility}}">
+	                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+	                                            <TextBlock FontSize="18" FontWeight="SemiBold" Foreground="#E6E6E6" Text="Nothing selected" HorizontalAlignment="Center" />
+	                                            <TextBlock Margin="0,6,0,0" Foreground="#BDBDBD" Text="{Binding EmptyRightPaneMessage}" HorizontalAlignment="Center" />
+	                                        </StackPanel>
+	                                    </Border>
+	                                </Grid>
+	                            </Border>
 
                             <Border Grid.Row="1"
                                     Grid.Column="0"
@@ -1036,10 +1240,10 @@
                                                    Text="{Binding SelectedCapture.ActiveWindowTitle}" />
                                     </StackPanel>
 
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}" Text="User" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
-                                            <ComboBox Width="160"
+	                                    <StackPanel Grid.Column="2">
+	                                        <TextBlock FontSize="11" Foreground="{StaticResource MutedBrush}" Text="User" />
+	                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
+	                                            <ComboBox Width="160"
                                                       Margin="0,0,8,0"
                                                       ItemsSource="{Binding SessionUserChoices}"
                                                       SelectedItem="{Binding SelectedCaptureUserChoice, Mode=TwoWay}" />

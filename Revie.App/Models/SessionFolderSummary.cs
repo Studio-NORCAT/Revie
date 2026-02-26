@@ -5,6 +5,7 @@ namespace Revie.App.Models;
 public sealed class SessionFolderSummary : INotifyPropertyChanged
 {
     private int _unviewedCaptureCount;
+    private string _reviewState = Revie.App.Models.ReviewState.None;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -16,7 +17,26 @@ public sealed class SessionFolderSummary : INotifyPropertyChanged
     public string FolderPath { get; init; } = string.Empty;
     public int CaptureCount { get; init; }
     public string PreviewImagePath { get; init; } = string.Empty;
+    public bool HasRevisedUploads { get; init; }
     public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewImagePath);
+    public string ReviewState
+    {
+        get => _reviewState;
+        set
+        {
+            var normalized = Revie.App.Models.ReviewState.Normalize(value);
+            if (string.Equals(_reviewState, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _reviewState = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReviewState)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReviewStateDisplay)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsInReview)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCompleted)));
+        }
+    }
     public int UnviewedCaptureCount
     {
         get => _unviewedCaptureCount;
@@ -34,6 +54,9 @@ public sealed class SessionFolderSummary : INotifyPropertyChanged
         }
     }
     public bool HasUnviewedCaptures => _unviewedCaptureCount > 0;
+    public string ReviewStateDisplay => Revie.App.Models.ReviewState.ToDisplay(_reviewState);
+    public bool IsInReview => string.Equals(_reviewState, Revie.App.Models.ReviewState.InReview, StringComparison.OrdinalIgnoreCase);
+    public bool IsCompleted => string.Equals(_reviewState, Revie.App.Models.ReviewState.Completed, StringComparison.OrdinalIgnoreCase);
 
     public string TimeLabel => StartLocal == default
         ? "(Unknown time)"

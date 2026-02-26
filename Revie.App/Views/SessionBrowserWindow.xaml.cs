@@ -21,6 +21,15 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private const string NoProjectLabel = "(No Project)";
     private const string AllUsersLabel = "(All Users)";
     private const string NoUserLabel = "(No User)";
+    private const string UploadsFolderName = "user-uploads";
+    private static readonly HashSet<string> SupportedUploadImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".bmp",
+        ".webp"
+    };
     private static readonly JsonSerializerOptions MetadataJsonOptions = new()
     {
         WriteIndented = true,
@@ -43,6 +52,10 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private string _selectedSessionProjectFilter = AllProjectsLabel;
     private string _selectedSessionUserFilter = AllUsersLabel;
     private string _selectedCaptureUserChoice = NoUserLabel;
+    private int _selectedCaptureCompareTabIndex;
+    private CapturePreviewVariant? _selectedCapturePreviewVariant;
+    private CapturePreviewVariant? _selectedUploadedCapturePreviewVariant;
+    private string _selectedCapturePreviewPath = string.Empty;
     private SessionFolderSummary? _selectedSession;
     private CaptureListItemViewModel? _selectedCapture;
     private bool _isInCaptureMode;
@@ -94,9 +107,13 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         SessionContextUserChoices = new ObservableCollection<string> { NoUserLabel };
         SessionCaptures = new ObservableCollection<CaptureListItemViewModel>();
         SessionPreviewCaptures = new ObservableCollection<CaptureListItemViewModel>();
+        CapturePreviewVariants = new ObservableCollection<CapturePreviewVariant>();
+        UploadedCapturePreviewVariants = new ObservableCollection<CapturePreviewVariant>();
 
         SessionCaptures.CollectionChanged += OnSessionCapturesCollectionChanged;
         SessionPreviewCaptures.CollectionChanged += OnSessionPreviewCapturesCollectionChanged;
+        CapturePreviewVariants.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CaptureUploadHintText));
+        UploadedCapturePreviewVariants.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CaptureUploadHintText));
         Sessions.CollectionChanged += OnSessionsCollectionChanged;
         _sessionNoteSavedFeedbackTimer = new DispatcherTimer
         {
@@ -142,6 +159,8 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     public ObservableCollection<string> SessionContextUserChoices { get; }
     public ObservableCollection<CaptureListItemViewModel> SessionCaptures { get; }
     public ObservableCollection<CaptureListItemViewModel> SessionPreviewCaptures { get; }
+    public ObservableCollection<CapturePreviewVariant> CapturePreviewVariants { get; }
+    public ObservableCollection<CapturePreviewVariant> UploadedCapturePreviewVariants { get; }
 
     public bool IsSessionNoteSavedVisible
     {
@@ -208,6 +227,88 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         }
     }
 
+    public CapturePreviewVariant? SelectedCapturePreviewVariant
+    {
+        get => _selectedCapturePreviewVariant;
+        set
+        {
+            if (ReferenceEquals(_selectedCapturePreviewVariant, value))
+            {
+                return;
+            }
+
+            _selectedCapturePreviewVariant = value;
+            OnPropertyChanged(nameof(SelectedCapturePreviewVariant));
+            SetSelectedCapturePreviewPath(value?.ImagePath);
+            ApplySelectedCapturePreviewVariant();
+            if (value is not null && !value.IsOriginal)
+            {
+                SetCaptureCompareTabIndex(1, applySelection: false);
+            }
+
+            _selectedUploadedCapturePreviewVariant = value is { IsOriginal: false } ? value : null;
+            OnPropertyChanged(nameof(SelectedUploadedCapturePreviewVariant));
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            if (IsInCaptureMode && SelectedCapture is not null && !IsSelectedCaptureVideo)
+            {
+                Dispatcher.BeginInvoke(new Action(FitPreviewToViewport), DispatcherPriority.Background);
+            }
+        }
+    }
+
+    public CapturePreviewVariant? SelectedUploadedCapturePreviewVariant
+    {
+        get => _selectedUploadedCapturePreviewVariant;
+        set
+        {
+            if (ReferenceEquals(_selectedUploadedCapturePreviewVariant, value))
+            {
+                return;
+            }
+
+            _selectedUploadedCapturePreviewVariant = value;
+            OnPropertyChanged(nameof(SelectedUploadedCapturePreviewVariant));
+            if (value is null)
+            {
+                return;
+            }
+
+            SetCaptureCompareTabIndex(1, applySelection: false);
+            if (!ReferenceEquals(SelectedCapturePreviewVariant, value))
+            {
+                SelectedCapturePreviewVariant = value;
+            }
+        }
+    }
+
+    public bool IsReviewCompareTabActive
+    {
+        get => _selectedCaptureCompareTabIndex == 0;
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            SetCaptureCompareTabIndex(0, applySelection: true);
+        }
+    }
+
+    public bool IsRevisedUploadTabActive
+    {
+        get => _selectedCaptureCompareTabIndex == 1;
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            SetCaptureCompareTabIndex(1, applySelection: true);
+        }
+    }
+
     public SessionFolderSummary? SelectedSession
     {
         get => _selectedSession;
@@ -248,6 +349,8 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             _selectedCapture = value;
             IsSessionNoteSavedVisible = false;
             SelectedCaptureUserChoice = ToCaptureUserChoice(value?.AssignedUser);
+            RebuildCapturePreviewVariants(preferredPath: value?.ImagePath);
+            SetCaptureCompareTabIndex(0, applySelection: true);
             OnPropertyChanged(nameof(IsSelectedCaptureVideo));
             OnPropertyChanged(nameof(SelectedCapture));
             OnPropertyChanged(nameof(CanOpen));
@@ -255,6 +358,10 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(RightPaneSubtitle));
             OnPropertyChanged(nameof(EmptyRightPaneVisible));
             OnPropertyChanged(nameof(EmptyRightPaneMessage));
+            OnPropertyChanged(nameof(CanManageCaptureUploads));
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            OnPropertyChanged(nameof(IsReviewCompareTabActive));
+            OnPropertyChanged(nameof(IsRevisedUploadTabActive));
             if (value?.IsVideo == true)
             {
                 ConfigureSessionVideoPreview(value.VideoPath);
@@ -291,6 +398,10 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(LeftEmptyMessage));
             OnPropertyChanged(nameof(SessionPreviewEmptyVisible));
             OnPropertyChanged(nameof(SessionPreviewEmptyMessage));
+            OnPropertyChanged(nameof(CanManageCaptureUploads));
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            OnPropertyChanged(nameof(IsReviewCompareTabActive));
+            OnPropertyChanged(nameof(IsRevisedUploadTabActive));
 
             if (!value && _isSessionPreviewFullscreen)
             {
@@ -332,6 +443,16 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
     public bool HasSessionPreviewCaptures => SessionPreviewCaptures.Count > 0;
     public bool IsSelectedCaptureVideo => SelectedCapture?.IsVideo == true;
+    public string SelectedCapturePreviewPath => _selectedCapturePreviewPath;
+    public bool CanManageCaptureUploads => IsInCaptureMode && SelectedCapture is not null && !IsSelectedCaptureVideo;
+    public string CaptureUploadHintText =>
+        IsReviewCompareTabActive
+            ? "Review mode: showing original capture."
+            : UploadedCapturePreviewVariants.Count == 0
+                ? "Drag images here or click Upload to add revised screenshots."
+                : SelectedCapturePreviewVariant is null || SelectedCapturePreviewVariant.IsOriginal
+                    ? "Select an uploaded revision to compare."
+                    : $"Viewing: {SelectedCapturePreviewVariant.Label}";
 
     public bool IsBusy
     {
@@ -717,6 +838,219 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     {
         var normalized = NormalizeCaptureUserChoice(userChoice);
         return string.Equals(normalized, NoUserLabel, StringComparison.Ordinal) ? string.Empty : normalized;
+    }
+
+    private void SetSelectedCapturePreviewPath(string? path)
+    {
+        var normalized = (path ?? string.Empty).Trim();
+        if (string.Equals(_selectedCapturePreviewPath, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _selectedCapturePreviewPath = normalized;
+        OnPropertyChanged(nameof(SelectedCapturePreviewPath));
+    }
+
+    private void SetCaptureCompareTabIndex(int tabIndex, bool applySelection)
+    {
+        var normalized = tabIndex <= 0 ? 0 : 1;
+        if (_selectedCaptureCompareTabIndex == normalized)
+        {
+            if (applySelection)
+            {
+                ApplyCompareTabSelection();
+            }
+
+            return;
+        }
+
+        _selectedCaptureCompareTabIndex = normalized;
+        OnPropertyChanged(nameof(IsReviewCompareTabActive));
+        OnPropertyChanged(nameof(IsRevisedUploadTabActive));
+        OnPropertyChanged(nameof(CaptureUploadHintText));
+        if (applySelection)
+        {
+            ApplyCompareTabSelection();
+        }
+    }
+
+    private void ApplyCompareTabSelection()
+    {
+        if (SelectedCapture is null || SelectedCapture.IsVideo)
+        {
+            return;
+        }
+
+        if (_selectedCaptureCompareTabIndex == 0)
+        {
+            var original = CapturePreviewVariants.FirstOrDefault(variant => variant.IsOriginal);
+            if (original is not null && !ReferenceEquals(SelectedCapturePreviewVariant, original))
+            {
+                SelectedCapturePreviewVariant = original;
+            }
+
+            return;
+        }
+
+        if (SelectedCapturePreviewVariant is { IsOriginal: false })
+        {
+            return;
+        }
+
+        var firstUpload = UploadedCapturePreviewVariants.FirstOrDefault();
+        if (firstUpload is not null)
+        {
+            SelectedCapturePreviewVariant = firstUpload;
+        }
+    }
+
+    private void ApplySelectedCapturePreviewVariant()
+    {
+        if (SelectedCapture is null || SelectedCapture.IsVideo)
+        {
+            return;
+        }
+
+        var selectedVariant = SelectedCapturePreviewVariant;
+        var overridePath = selectedVariant is not null && !selectedVariant.IsOriginal
+            ? selectedVariant.ImagePath
+            : string.Empty;
+        SelectedCapture.SetPreviewOverridePath(overridePath);
+    }
+
+    private void RebuildCapturePreviewVariants(string? preferredPath = null)
+    {
+        var previousPath = !string.IsNullOrWhiteSpace(preferredPath)
+            ? preferredPath.Trim()
+            : (_selectedCapturePreviewVariant?.ImagePath ?? string.Empty);
+
+        CapturePreviewVariants.Clear();
+        UploadedCapturePreviewVariants.Clear();
+        if (SelectedCapture is null || SelectedCapture.IsVideo)
+        {
+            _selectedCapturePreviewVariant = null;
+            _selectedUploadedCapturePreviewVariant = null;
+            OnPropertyChanged(nameof(SelectedCapturePreviewVariant));
+            OnPropertyChanged(nameof(SelectedUploadedCapturePreviewVariant));
+            SetSelectedCapturePreviewPath(string.Empty);
+            SetCaptureCompareTabIndex(0, applySelection: false);
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            return;
+        }
+
+        var originalPath = (SelectedCapture.ImagePath ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(originalPath) && File.Exists(originalPath))
+        {
+            CapturePreviewVariants.Add(new CapturePreviewVariant("original", "Original Capture", originalPath, isOriginal: true));
+        }
+
+        var metadataPaths = SelectedCapture.Record.Metadata.UploadedImagePaths ?? new List<string>();
+        var normalizedStoredPaths = new List<string>();
+        foreach (var storedPath in metadataPaths)
+        {
+            if (!TryResolveCaptureVariantPath(SelectedCapture, storedPath, out var resolvedPath))
+            {
+                continue;
+            }
+
+            var normalizedStoredPath = ToStoredUploadPath(SelectedCapture, resolvedPath);
+            if (normalizedStoredPaths.Contains(normalizedStoredPath, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            normalizedStoredPaths.Add(normalizedStoredPath);
+            var uploadedVariant = new CapturePreviewVariant(
+                normalizedStoredPath,
+                $"Upload: {Path.GetFileName(resolvedPath)}",
+                resolvedPath,
+                isOriginal: false);
+            CapturePreviewVariants.Add(uploadedVariant);
+            UploadedCapturePreviewVariants.Add(uploadedVariant);
+        }
+
+        SelectedCapture.Record.Metadata.UploadedImagePaths = normalizedStoredPaths;
+        var selection = CapturePreviewVariants.FirstOrDefault(variant =>
+                            string.Equals(variant.ImagePath, previousPath, StringComparison.OrdinalIgnoreCase)) ??
+                        CapturePreviewVariants.FirstOrDefault();
+        _selectedCapturePreviewVariant = null;
+        _selectedUploadedCapturePreviewVariant = null;
+        OnPropertyChanged(nameof(SelectedCapturePreviewVariant));
+        OnPropertyChanged(nameof(SelectedUploadedCapturePreviewVariant));
+        if (selection is null)
+        {
+            SetSelectedCapturePreviewPath(string.Empty);
+            SetCaptureCompareTabIndex(0, applySelection: false);
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            return;
+        }
+
+        SetCaptureCompareTabIndex(selection.IsOriginal ? 0 : 1, applySelection: false);
+        SelectedCapturePreviewVariant = selection;
+    }
+
+    private static bool TryResolveCaptureVariantPath(CaptureListItemViewModel capture, string? storedPath, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        var rawPath = (storedPath ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(rawPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            resolvedPath = Path.IsPathRooted(rawPath)
+                ? Path.GetFullPath(rawPath)
+                : Path.GetFullPath(Path.Combine(capture.CaptureDirectory ?? string.Empty, rawPath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(resolvedPath) &&
+               File.Exists(resolvedPath) &&
+               IsSupportedUploadImagePath(resolvedPath);
+    }
+
+    private static string ToStoredUploadPath(CaptureListItemViewModel capture, string absolutePath)
+    {
+        var normalizedPath = (absolutePath ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return string.Empty;
+        }
+
+        var captureDirectory = (capture.CaptureDirectory ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(captureDirectory))
+        {
+            return normalizedPath;
+        }
+
+        try
+        {
+            var normalizedCaptureDirectory = Path.GetFullPath(captureDirectory);
+            var normalizedAbsolutePath = Path.GetFullPath(normalizedPath);
+            var relativePath = Path.GetRelativePath(normalizedCaptureDirectory, normalizedAbsolutePath);
+            if (!relativePath.StartsWith("..", StringComparison.Ordinal))
+            {
+                return relativePath.Replace('\\', '/');
+            }
+        }
+        catch
+        {
+            // Fallback to absolute path.
+        }
+
+        return normalizedPath;
+    }
+
+    private static bool IsSupportedUploadImagePath(string path)
+    {
+        var extension = Path.GetExtension(path ?? string.Empty);
+        return SupportedUploadImageExtensions.Contains(extension);
     }
 
     private async Task LoadSessionPreviewAsync(SessionFolderSummary? session)
@@ -1273,10 +1607,15 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
         try
         {
+            var targetPath = SelectedCapture.IsVideo
+                ? SelectedCapture.MediaPath
+                : (!string.IsNullOrWhiteSpace(SelectedCapturePreviewPath) && File.Exists(SelectedCapturePreviewPath)
+                    ? SelectedCapturePreviewPath
+                    : SelectedCapture.MediaPath);
             Process.Start(new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = $"/select,\"{SelectedCapture.MediaPath}\"",
+                Arguments = $"/select,\"{targetPath}\"",
                 UseShellExecute = true
             });
         }
@@ -1490,6 +1829,47 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         catch (Exception ex)
         {
             StatusText = $"Session user clear failed: {ex.Message}";
+        }
+    }
+
+    private async void SetSessionReviewStateInReview_OnClick(object sender, RoutedEventArgs e)
+    {
+        await SetSelectedSessionReviewStateAsync(ReviewState.InReview);
+    }
+
+    private async void SetSessionReviewStateCompleted_OnClick(object sender, RoutedEventArgs e)
+    {
+        await SetSelectedSessionReviewStateAsync(ReviewState.Completed);
+    }
+
+    private async void ClearSessionReviewState_OnClick(object sender, RoutedEventArgs e)
+    {
+        await SetSelectedSessionReviewStateAsync(ReviewState.None);
+    }
+
+    private async Task SetSelectedSessionReviewStateAsync(string reviewState)
+    {
+        if (SelectedSession is null)
+        {
+            return;
+        }
+
+        var normalizedState = ReviewState.Normalize(reviewState);
+        var selectedFolderPath = SelectedSession.FolderPath;
+        try
+        {
+            var updated = await SetSessionReviewStateAsync(selectedFolderPath, normalizedState);
+            RefreshSessions();
+            SelectedSession = Sessions.FirstOrDefault(session =>
+                string.Equals(session.FolderPath, selectedFolderPath, StringComparison.OrdinalIgnoreCase));
+
+            StatusText = string.IsNullOrWhiteSpace(normalizedState)
+                ? $"Session review state cleared ({updated} capture(s) updated)."
+                : $"Session review state set to '{ReviewState.ToDisplay(normalizedState)}' ({updated} capture(s) updated).";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Session review state update failed: {ex.Message}";
         }
     }
 
@@ -1776,6 +2156,190 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             ? "Capture user cleared."
             : $"Capture tagged for '{targetUser}'.";
         ShowSessionNoteSavedFeedback();
+    }
+
+    private async void UploadCaptureImagesButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (!CanManageCaptureUploads || SelectedCapture is null)
+        {
+            StatusText = "Select an image capture first.";
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select revised images",
+            Multiselect = true,
+            CheckFileExists = true,
+            Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp;*.webp|All Files|*.*"
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        await ImportCaptureUploadImagesAsync(dialog.FileNames);
+    }
+
+    private void CaptureUploadDropZone_OnDragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!CanManageCaptureUploads || !TryGetImagePathsFromDropData(e.Data, out _))
+        {
+            e.Effects = System.Windows.DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = System.Windows.DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private async void CaptureUploadDropZone_OnDrop(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!CanManageCaptureUploads || !TryGetImagePathsFromDropData(e.Data, out var filePaths))
+        {
+            StatusText = "Drop one or more image files.";
+            return;
+        }
+
+        await ImportCaptureUploadImagesAsync(filePaths);
+    }
+
+    private static bool TryGetImagePathsFromDropData(System.Windows.IDataObject dataObject, out string[] filePaths)
+    {
+        filePaths = Array.Empty<string>();
+        if (!dataObject.GetDataPresent(System.Windows.DataFormats.FileDrop))
+        {
+            return false;
+        }
+
+        var dropped = dataObject.GetData(System.Windows.DataFormats.FileDrop) as string[];
+        if (dropped is null || dropped.Length == 0)
+        {
+            return false;
+        }
+
+        filePaths = dropped
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Where(IsSupportedUploadImagePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return filePaths.Length > 0;
+    }
+
+    private async Task ImportCaptureUploadImagesAsync(IEnumerable<string> sourceImagePaths)
+    {
+        if (SelectedCapture is null || SelectedCapture.IsVideo)
+        {
+            StatusText = "Select an image capture first.";
+            return;
+        }
+
+        var sourcePaths = sourceImagePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Where(IsSupportedUploadImagePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (sourcePaths.Length == 0)
+        {
+            StatusText = "No valid image files were provided.";
+            return;
+        }
+
+        var capture = SelectedCapture;
+        try
+        {
+            var captureDirectory = (capture.CaptureDirectory ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(captureDirectory))
+            {
+                StatusText = "Cannot upload images: capture folder is missing.";
+                return;
+            }
+
+            Directory.CreateDirectory(captureDirectory);
+            var uploadDirectory = Path.Combine(captureDirectory, UploadsFolderName);
+            Directory.CreateDirectory(uploadDirectory);
+
+            var metadataUploadPaths = capture.Record.Metadata.UploadedImagePaths?.ToList() ?? new List<string>();
+            var importedCount = 0;
+            string? lastImportedResolvedPath = null;
+            foreach (var sourcePath in sourcePaths)
+            {
+                var destinationPath = BuildUniqueUploadDestinationPath(uploadDirectory, Path.GetFileName(sourcePath));
+                File.Copy(sourcePath, destinationPath, overwrite: false);
+                var storedPath = ToStoredUploadPath(capture, destinationPath);
+                if (metadataUploadPaths.Contains(storedPath, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                metadataUploadPaths.Add(storedPath);
+                importedCount++;
+                lastImportedResolvedPath = destinationPath;
+            }
+
+            if (importedCount <= 0)
+            {
+                StatusText = "No new images were added.";
+                return;
+            }
+
+            capture.Record.Metadata.UploadedImagePaths = metadataUploadPaths;
+            if (!await PersistSelectedCaptureMetadataAsync(capture))
+            {
+                return;
+            }
+
+            RebuildCapturePreviewVariants(lastImportedResolvedPath);
+            StatusText = importedCount == 1
+                ? "Added 1 uploaded image."
+                : $"Added {importedCount:n0} uploaded images.";
+            ShowSessionNoteSavedFeedback();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Image upload failed: {ex.Message}";
+            AppLogService.Error("Session.CaptureUpload.Failed", "Failed importing session capture uploads.", ex, new
+            {
+                capture.Record.Metadata.JsonPath
+            });
+        }
+    }
+
+    private static string BuildUniqueUploadDestinationPath(string uploadDirectory, string sourceFileName)
+    {
+        var baseName = SanitizeFileName(Path.GetFileNameWithoutExtension(sourceFileName));
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            baseName = "upload";
+        }
+
+        var extension = Path.GetExtension(sourceFileName ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ".png";
+        }
+
+        var candidate = Path.Combine(uploadDirectory, $"{baseName}{extension}");
+        var suffix = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.Combine(uploadDirectory, $"{baseName}_{suffix:00}{extension}");
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var sanitized = (value ?? string.Empty).Trim();
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            sanitized = sanitized.Replace(invalid, '_');
+        }
+
+        return sanitized.Trim();
     }
 
     private void SessionListBox_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -2430,6 +2994,22 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         return updated;
     }
 
+    private async Task<int> SetSessionReviewStateAsync(string sessionFolderPath, string reviewState)
+    {
+        var normalizedState = ReviewState.Normalize(reviewState);
+        return await UpdateSessionCaptureMetadataAsync(sessionFolderPath, metadata =>
+        {
+            var current = ReviewState.Normalize(metadata.ReviewState);
+            if (string.Equals(current, normalizedState, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            metadata.ReviewState = normalizedState;
+            return true;
+        });
+    }
+
     private async Task<int> AddUserTagToSessionAsync(string sessionFolderPath, string userTag)
     {
         var normalizedUser = CaptureService.NormalizeUser(userTag);
@@ -2633,6 +3213,22 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
         _sessionNoteSavedFeedbackTimer.Stop();
         _sessionNoteSavedFeedbackTimer.Start();
+    }
+
+    public sealed class CapturePreviewVariant
+    {
+        public CapturePreviewVariant(string key, string label, string imagePath, bool isOriginal)
+        {
+            Key = key;
+            Label = label;
+            ImagePath = imagePath;
+            IsOriginal = isOriginal;
+        }
+
+        public string Key { get; }
+        public string Label { get; }
+        public string ImagePath { get; }
+        public bool IsOriginal { get; }
     }
 
     private static T? FindAncestor<T>(DependencyObject? start) where T : DependencyObject

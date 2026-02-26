@@ -92,7 +92,7 @@
         <Style x:Key="ColorSwatchStyle" TargetType="Button">
             <Setter Property="Width" Value="26" />
             <Setter Property="Height" Value="26" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Margin" Value="2" />
             <Setter Property="BorderBrush" Value="#202020" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
@@ -127,6 +127,7 @@
                 VerticalAlignment="Top"
                 Margin="14"
                 Padding="12"
+                MinWidth="280"
                 CornerRadius="12"
                 Background="{StaticResource PanelBackgroundBrush}"
                 BorderBrush="{StaticResource PanelBorderBrush}"
@@ -139,37 +140,38 @@
                     <TextBlock FontWeight="SemiBold" FontSize="14" Foreground="#EFEFEF" Text="Revie Tools" />
                     <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="#B8B8B8" Text="Draw on screen (Ctrl+Shift+D to toggle)" />
 
-                    <WrapPanel Margin="0,10,0,0" ItemHeight="34">
+                    <UniformGrid Margin="0,10,0,0"
+                                 Rows="1"
+                                 Columns="6"
+                                 Width="180"
+                                 HorizontalAlignment="Left">
+                        <Button Tag="#FFFF0000"
+                                Style="{StaticResource ColorSwatchStyle}"
+                                Background="#FFFF0000"
+                                Click="ColorButton_OnClick" />
+                        <Button Tag="#FF00B050"
+                                Style="{StaticResource ColorSwatchStyle}"
+                                Background="#FF00B050"
+                                Click="ColorButton_OnClick" />
+                        <Button Tag="#FF0070FF"
+                                Style="{StaticResource ColorSwatchStyle}"
+                                Background="#FF0070FF"
+                                Click="ColorButton_OnClick" />
                         <Button Tag="#FFFFEA00"
-                                Width="34"
-                                Height="34"
-                                Margin="0,0,8,8"
                                 Style="{StaticResource ColorSwatchStyle}"
-                                BorderBrush="#A48A00"
                                 Background="#FFFFEA00"
-                                Click="ColorButton_OnClick" />
-                        <Button Tag="#FFFFB300"
-                                Margin="0,0,8,8"
-                                Style="{StaticResource ColorSwatchStyle}"
-                                Background="#FFFFB300"
-                                Click="ColorButton_OnClick" />
-                        <Button Tag="#FFFF6F00"
-                                Margin="0,0,8,8"
-                                Style="{StaticResource ColorSwatchStyle}"
-                                Background="#FFFF6F00"
+                                BorderBrush="#A48A00"
                                 Click="ColorButton_OnClick" />
                         <Button Tag="#FFFFFFFF"
-                                Margin="0,0,8,8"
                                 Style="{StaticResource ColorSwatchStyle}"
                                 Background="#FFFFFFFF"
                                 Click="ColorButton_OnClick" />
                         <Button Tag="#FF000000"
-                                Margin="0,0,0,8"
                                 Style="{StaticResource ColorSwatchStyle}"
                                 Background="#FF000000"
                                 BorderBrush="#666666"
                                 Click="ColorButton_OnClick" />
-                    </WrapPanel>
+                    </UniformGrid>
 
                     <WrapPanel Margin="0,2,0,0">
                         <Button Tag="Small" Margin="0,0,6,6" Style="{StaticResource ToolbarButtonStyle}" Content="Small" Click="SizeButton_OnClick" />

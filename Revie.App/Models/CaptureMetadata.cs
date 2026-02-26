@@ -32,6 +32,7 @@ public sealed class CaptureMetadata
     public string ActiveProcessName { get; set; } = string.Empty;
     public string Note { get; set; } = string.Empty;
     public string SourceJsonPath { get; set; } = string.Empty;
+    public List<string> UploadedImagePaths { get; set; } = new();
     public List<MonitorSnapshot> Monitors { get; set; } = new();
 
     [JsonExtensionData]
