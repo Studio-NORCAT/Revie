@@ -2,6 +2,19 @@
 
 Revie is a Windows 10/11 tray-first desktop app built with **C# / .NET 8 LTS / WPF (MVVM)**.
 
+
+<p align="center">
+  <a href="https://studio.norcat.org/github/revie_program.jpg" target="_blank" rel="noopener noreferrer">
+    <img src="https://studio.norcat.org/github/revie_program.jpg" alt="GENESIS Engine Header" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://studio.norcat.org/github/revie_program_review.jpg" target="_blank" rel="noopener noreferrer">
+    <img src="https://studio.norcat.org/github/revie_program_review.jpg" alt="GENESIS Engine Header" width="100%" />
+  </a>
+</p>
+
 It provides:
 - Transparent always-on-top drawing overlay.
 - Responsive drawing toolbar that clamps/wraps for different resolutions and multi-monitor desktops.
