@@ -5,6 +5,8 @@ namespace Revie.App.Services;
 
 public sealed class SessionArchiveService
 {
+    private const string AttachmentsFolderName = "attachments";
+
     public readonly record struct SessionSaveProgress(int ProcessedCaptureCount, int TotalCaptureCount);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -77,36 +79,35 @@ public sealed class SessionArchiveService
             var record = orderedCaptures[i];
             var sourceDirectory = record.Metadata.CaptureDirectory ?? string.Empty;
             var localTime = record.Metadata.LocalTimestamp == default ? DateTime.Now : record.Metadata.LocalTimestamp;
-            var targetCaptureDirectory = Path.Combine(capturesDirectory, $"{i + 1:000}_{localTime:yyyyMMdd_HHmmss_fff}");
-            var targetImagePath = Path.Combine(targetCaptureDirectory, "capture.png");
-            var targetJsonPath = Path.Combine(targetCaptureDirectory, "capture.json");
+            var captureType = NormalizeCaptureType(record.Metadata.CaptureType);
+            var captureBaseName = $"{i + 1:000}_{localTime:yyyyMMdd_HHmmss_fff}";
+            var targetCaptureDirectory = Path.Combine(capturesDirectory, AttachmentsFolderName, captureBaseName);
+            var targetImagePath = captureType == "image"
+                ? Path.Combine(capturesDirectory, $"{captureBaseName}.png")
+                : string.Empty;
+            var targetVideoPath = captureType == "video"
+                ? Path.Combine(capturesDirectory, $"{captureBaseName}.mp4")
+                : string.Empty;
+            var targetThumbnailPath = captureType == "video"
+                ? Path.Combine(capturesDirectory, $"{captureBaseName}.thumbnail.png")
+                : targetImagePath;
+            var targetJsonPath = Path.Combine(capturesDirectory, $"{captureBaseName}.json");
 
-            if (!string.IsNullOrWhiteSpace(sourceDirectory) && Directory.Exists(sourceDirectory))
-            {
-                if (!TryMoveDirectory(sourceDirectory, targetCaptureDirectory))
-                {
-                    CopyDirectory(sourceDirectory, targetCaptureDirectory);
-                }
-            }
-            else
-            {
-                Directory.CreateDirectory(targetCaptureDirectory);
-                if (File.Exists(record.Metadata.ImagePath))
-                {
-                    File.Copy(record.Metadata.ImagePath, targetImagePath, overwrite: true);
-                }
-
-                if (File.Exists(record.Metadata.JsonPath))
-                {
-                    File.Copy(record.Metadata.JsonPath, targetJsonPath, overwrite: true);
-                }
-            }
+            ExportCaptureFiles(
+                record.Metadata,
+                sourceDirectory,
+                targetCaptureDirectory,
+                targetImagePath,
+                targetVideoPath,
+                targetThumbnailPath);
 
             WriteSessionCaptureMetadata(
                 record.Metadata,
                 normalizedName,
                 targetCaptureDirectory,
                 targetImagePath,
+                targetVideoPath,
+                targetThumbnailPath,
                 targetJsonPath);
 
             exported.Add(new SessionCaptureEntry
@@ -120,7 +121,12 @@ public sealed class SessionArchiveService
                 ProcessName = record.Metadata.ActiveProcessName ?? string.Empty,
                 OriginalCaptureDirectory = record.Metadata.CaptureDirectory ?? string.Empty,
                 OriginalJsonPath = record.Metadata.JsonPath ?? string.Empty,
-                ExportedCaptureDirectory = targetCaptureDirectory
+                ExportedCaptureDirectory = GetRelativePathOrAbsolute(sessionDirectory, targetCaptureDirectory),
+                ExportedMetadataPath = GetRelativePathOrAbsolute(sessionDirectory, targetJsonPath),
+                ExportedMediaPath = GetRelativePathOrAbsolute(sessionDirectory, captureType == "video" ? targetVideoPath : targetImagePath),
+                ExportedThumbnailPath = string.Equals(captureType, "video", StringComparison.OrdinalIgnoreCase) && File.Exists(targetThumbnailPath)
+                    ? GetRelativePathOrAbsolute(sessionDirectory, targetThumbnailPath)
+                    : string.Empty
             });
 
             progress?.Report(new SessionSaveProgress(i + 1, orderedCaptures.Length));
@@ -143,37 +149,63 @@ public sealed class SessionArchiveService
         return sessionDirectory;
     }
 
-    private static bool TryMoveDirectory(string sourcePath, string targetPath)
+    private static void ExportCaptureFiles(
+        CaptureMetadata sourceMetadata,
+        string sourceDirectory,
+        string targetCaptureDirectory,
+        string targetImagePath,
+        string targetVideoPath,
+        string targetThumbnailPath)
     {
-        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(targetPath))
+        var sourceJsonPath = ResolveSourcePath(sourceMetadata.JsonPath, sourceDirectory, "capture.json");
+        var sourceImagePath = ResolveSourcePath(sourceMetadata.ImagePath, sourceDirectory, "capture.png");
+        var sourceVideoPath = ResolveSourcePath(sourceMetadata.VideoPath, sourceDirectory, "capture.mp4");
+        var sourceThumbnailPath = ResolveSourcePath(sourceMetadata.ThumbnailPath, sourceDirectory, "thumbnail.png");
+
+        if (!string.IsNullOrWhiteSpace(targetImagePath))
         {
-            return false;
+            CopyFileIfExists(sourceImagePath, targetImagePath);
         }
 
-        if (!Directory.Exists(sourcePath))
+        if (!string.IsNullOrWhiteSpace(targetVideoPath))
         {
-            return false;
+            CopyFileIfExists(sourceVideoPath, targetVideoPath);
         }
 
-        try
+        if (!string.IsNullOrWhiteSpace(targetThumbnailPath) && !string.Equals(targetThumbnailPath, targetImagePath, StringComparison.OrdinalIgnoreCase))
         {
-            var targetParent = Path.GetDirectoryName(targetPath);
-            if (!string.IsNullOrWhiteSpace(targetParent))
+            if (File.Exists(sourceThumbnailPath))
             {
-                Directory.CreateDirectory(targetParent);
+                CopyFileIfExists(sourceThumbnailPath, targetThumbnailPath);
             }
+            else if (File.Exists(sourceImagePath))
+            {
+                CopyFileIfExists(sourceImagePath, targetThumbnailPath);
+            }
+        }
 
-            Directory.Move(sourcePath, targetPath);
-            return true;
-        }
-        catch (IOException)
+        if (string.IsNullOrWhiteSpace(sourceDirectory) || !Directory.Exists(sourceDirectory))
         {
-            return false;
+            return;
         }
-        catch (UnauthorizedAccessException)
+
+        var excludedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddExcludedPath(excludedPaths, sourceJsonPath);
+        AddExcludedPath(excludedPaths, sourceImagePath);
+        AddExcludedPath(excludedPaths, sourceVideoPath);
+        AddExcludedPath(excludedPaths, sourceThumbnailPath);
+
+        CopyAuxiliaryContent(sourceDirectory, targetCaptureDirectory, excludedPaths);
+    }
+
+    private static void AddExcludedPath(HashSet<string> excludedPaths, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
         {
-            return false;
+            return;
         }
+
+        excludedPaths.Add(Path.GetFullPath(path));
     }
 
     private static string EnsureUniqueDirectory(string desiredPath)
@@ -195,7 +227,7 @@ public sealed class SessionArchiveService
         return candidate;
     }
 
-    private static void CopyDirectory(string sourcePath, string targetPath)
+    private static void CopyAuxiliaryContent(string sourcePath, string targetPath, HashSet<string> excludedPaths)
     {
         var sourceDirectory = new DirectoryInfo(sourcePath);
         if (!sourceDirectory.Exists)
@@ -203,17 +235,81 @@ public sealed class SessionArchiveService
             return;
         }
 
-        Directory.CreateDirectory(targetPath);
-        foreach (var file in sourceDirectory.GetFiles())
+        foreach (var file in sourceDirectory.EnumerateFiles("*", SearchOption.AllDirectories))
         {
-            var destination = Path.Combine(targetPath, file.Name);
+            var sourceFilePath = file.FullName;
+            if (excludedPaths.Contains(Path.GetFullPath(sourceFilePath)))
+            {
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(sourceDirectory.FullName, sourceFilePath);
+            var destination = Path.Combine(targetPath, relativePath);
+            var destinationDirectory = Path.GetDirectoryName(destination);
+            if (!string.IsNullOrWhiteSpace(destinationDirectory))
+            {
+                Directory.CreateDirectory(destinationDirectory);
+            }
+
             file.CopyTo(destination, overwrite: true);
         }
+    }
 
-        foreach (var subDirectory in sourceDirectory.GetDirectories())
+    private static void CopyFileIfExists(string sourcePath, string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) ||
+            string.IsNullOrWhiteSpace(destinationPath) ||
+            !File.Exists(sourcePath))
         {
-            var destination = Path.Combine(targetPath, subDirectory.Name);
-            CopyDirectory(subDirectory.FullName, destination);
+            return;
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrWhiteSpace(destinationDirectory))
+        {
+            Directory.CreateDirectory(destinationDirectory);
+        }
+
+        File.Copy(sourcePath, destinationPath, overwrite: true);
+    }
+
+    private static string ResolveSourcePath(string path, string sourceDirectory, string fallbackName)
+    {
+        var normalized = (path ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.IsNullOrWhiteSpace(sourceDirectory)
+                ? string.Empty
+                : Path.Combine(sourceDirectory, fallbackName);
+        }
+
+        if (!Path.IsPathRooted(normalized) && !string.IsNullOrWhiteSpace(sourceDirectory))
+        {
+            normalized = Path.Combine(sourceDirectory, normalized.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeCaptureType(string captureType)
+    {
+        return string.Equals(captureType, "video", StringComparison.OrdinalIgnoreCase) ? "video" : "image";
+    }
+
+    private static string GetRelativePathOrAbsolute(string rootPath, string targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath) || string.IsNullOrWhiteSpace(targetPath))
+        {
+            return targetPath ?? string.Empty;
+        }
+
+        try
+        {
+            return Path.GetRelativePath(rootPath, targetPath).Replace('\\', '/');
+        }
+        catch
+        {
+            return targetPath;
         }
     }
 
@@ -229,24 +325,11 @@ public sealed class SessionArchiveService
         string sessionName,
         string targetCaptureDirectory,
         string targetImagePath,
+        string targetVideoPath,
+        string targetThumbnailPath,
         string targetJsonPath)
     {
-        CaptureMetadata metadata;
-        if (File.Exists(targetJsonPath))
-        {
-            try
-            {
-                metadata = JsonSerializer.Deserialize<CaptureMetadata>(File.ReadAllText(targetJsonPath), JsonOptions) ?? new CaptureMetadata();
-            }
-            catch
-            {
-                metadata = new CaptureMetadata();
-            }
-        }
-        else
-        {
-            metadata = new CaptureMetadata();
-        }
+        var metadata = LoadSourceMetadata(sourceMetadata);
 
         var captureType = string.Equals(sourceMetadata.CaptureType, "video", StringComparison.OrdinalIgnoreCase) ? "video" : "image";
         var assignedUsers = sourceMetadata.AssignedUsers is { Count: > 0 }
@@ -265,11 +348,11 @@ public sealed class SessionArchiveService
         metadata.StorageRoot = sourceMetadata.StorageRoot ?? string.Empty;
         metadata.CaptureDirectory = targetCaptureDirectory;
         metadata.ImagePath = captureType == "image" ? targetImagePath : string.Empty;
-        metadata.VideoPath = captureType == "video" ? Path.Combine(targetCaptureDirectory, "capture.mp4") : string.Empty;
+        metadata.VideoPath = captureType == "video" ? targetVideoPath : string.Empty;
         metadata.ThumbnailPath = captureType == "video"
-            ? (File.Exists(Path.Combine(targetCaptureDirectory, "thumbnail.png"))
-                ? Path.Combine(targetCaptureDirectory, "thumbnail.png")
-                : (File.Exists(targetImagePath) ? targetImagePath : string.Empty))
+            ? (File.Exists(targetThumbnailPath)
+                ? targetThumbnailPath
+                : string.Empty)
             : targetImagePath;
         metadata.DurationSeconds = sourceMetadata.DurationSeconds;
         metadata.HasMicrophoneAudio = sourceMetadata.HasMicrophoneAudio;
@@ -282,9 +365,65 @@ public sealed class SessionArchiveService
         metadata.ActiveProcessName = sourceMetadata.ActiveProcessName ?? string.Empty;
         metadata.Note = sourceMetadata.Note ?? string.Empty;
         metadata.SourceJsonPath = sourceMetadata.JsonPath ?? string.Empty;
+        metadata.UploadedImagePaths = NormalizeUploadedImagePaths(sourceMetadata, targetCaptureDirectory);
         metadata.Monitors = sourceMetadata.Monitors ?? new List<MonitorSnapshot>();
 
         SafeFileWriteService.WriteJsonAtomic(targetJsonPath, metadata, JsonOptions);
+    }
+
+    private static CaptureMetadata LoadSourceMetadata(CaptureMetadata sourceMetadata)
+    {
+        var sourceJsonPath = sourceMetadata.JsonPath?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(sourceJsonPath) || !File.Exists(sourceJsonPath))
+        {
+            return new CaptureMetadata();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<CaptureMetadata>(File.ReadAllText(sourceJsonPath), JsonOptions) ?? new CaptureMetadata();
+        }
+        catch
+        {
+            return new CaptureMetadata();
+        }
+    }
+
+    private static List<string> NormalizeUploadedImagePaths(CaptureMetadata sourceMetadata, string targetCaptureDirectory)
+    {
+        var normalizedPaths = new List<string>();
+        var sourceCaptureDirectory = sourceMetadata.CaptureDirectory?.Trim() ?? string.Empty;
+        foreach (var rawPath in sourceMetadata.UploadedImagePaths ?? new List<string>())
+        {
+            var trimmed = (rawPath ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            if (Path.IsPathRooted(trimmed) && !string.IsNullOrWhiteSpace(sourceCaptureDirectory))
+            {
+                try
+                {
+                    var relativePath = Path.GetRelativePath(sourceCaptureDirectory, trimmed);
+                    if (!relativePath.StartsWith("..", StringComparison.Ordinal))
+                    {
+                        normalizedPaths.Add(relativePath.Replace('\\', '/'));
+                        continue;
+                    }
+                }
+                catch
+                {
+                    // Fall back to the original stored path.
+                }
+            }
+
+            normalizedPaths.Add(trimmed.Replace('\\', '/'));
+        }
+
+        return normalizedPaths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private sealed class SessionManifest
@@ -311,5 +450,8 @@ public sealed class SessionArchiveService
         public string OriginalCaptureDirectory { get; set; } = string.Empty;
         public string OriginalJsonPath { get; set; } = string.Empty;
         public string ExportedCaptureDirectory { get; set; } = string.Empty;
+        public string ExportedMetadataPath { get; set; } = string.Empty;
+        public string ExportedMediaPath { get; set; } = string.Empty;
+        public string ExportedThumbnailPath { get; set; } = string.Empty;
     }
 }

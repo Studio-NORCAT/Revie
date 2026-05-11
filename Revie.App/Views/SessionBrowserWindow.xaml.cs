@@ -3058,14 +3058,14 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         string sessionFolderPath,
         Func<CaptureMetadata, bool> update)
     {
-        var capturesRoot = Path.Combine(sessionFolderPath ?? string.Empty, "captures");
-        if (!Directory.Exists(capturesRoot))
+        var metadataPaths = _sessionBrowseService.GetSessionCaptureMetadataPaths(sessionFolderPath);
+        if (metadataPaths.Count == 0)
         {
             return 0;
         }
 
         var updatedCount = 0;
-        foreach (var jsonPath in Directory.EnumerateFiles(capturesRoot, "capture.json", SearchOption.AllDirectories))
+        foreach (var jsonPath in metadataPaths)
         {
             CaptureMetadata? metadata;
             try

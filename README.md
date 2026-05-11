@@ -170,6 +170,10 @@ Files:
 - Start session in main UI or tray.
 - Save session to package current captures under:
   - `<StorageRoot>\Sessions\<timestamp_sessionName>\`
+- New session packages now keep capture media flat inside the session `captures\` folder for easier manual browsing:
+  - images/videos live directly under `captures\`
+  - metadata is saved as sidecar `.json` files beside each capture
+  - older folder-per-capture sessions are still supported and remain readable
 - Session captures are not duplicated into the normal project capture bucket.
 - Session browser supports:
   - list/open/delete sessions

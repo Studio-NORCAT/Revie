@@ -131,16 +131,23 @@ public sealed class SessionBrowseService
                             sessionUsers.Add(assignedUser);
                         }
 
+                        var manifestPreviewPath = ResolveManifestCapturePreviewPath(capture, folder);
+                        if (!string.IsNullOrWhiteSpace(manifestPreviewPath))
+                        {
+                            previewImagePath = manifestPreviewPath;
+                            continue;
+                        }
+
                         var exportedCaptureDirectory = TryReadString(capture, "ExportedCaptureDirectory");
                         if (string.IsNullOrWhiteSpace(exportedCaptureDirectory))
                         {
                             continue;
                         }
 
-                        var manifestPreviewPath = ResolvePreviewImageFromCaptureDirectory(exportedCaptureDirectory, folder);
-                        if (!string.IsNullOrWhiteSpace(manifestPreviewPath))
+                        var legacyPreviewPath = ResolvePreviewImageFromCaptureDirectory(exportedCaptureDirectory, folder);
+                        if (!string.IsNullOrWhiteSpace(legacyPreviewPath))
                         {
-                            previewImagePath = manifestPreviewPath;
+                            previewImagePath = legacyPreviewPath;
                         }
                     }
                 }
@@ -206,19 +213,14 @@ public sealed class SessionBrowseService
 
     public IReadOnlyList<CaptureRecord> GetSessionCaptures(string sessionFolderPath)
     {
-        if (string.IsNullOrWhiteSpace(sessionFolderPath))
-        {
-            return Array.Empty<CaptureRecord>();
-        }
-
-        var capturesRoot = Path.Combine(sessionFolderPath, "captures");
-        if (!Directory.Exists(capturesRoot))
+        var metadataPaths = GetSessionCaptureMetadataPaths(sessionFolderPath);
+        if (metadataPaths.Count == 0)
         {
             return Array.Empty<CaptureRecord>();
         }
 
         var records = new List<CaptureRecord>();
-        foreach (var jsonPath in SafeEnumerateCaptureJsonFiles(capturesRoot))
+        foreach (var jsonPath in metadataPaths)
         {
             var record = TryLoadRecordFromJsonPath(jsonPath, sessionFolderPath, applyLinkedAnnotationOverrides: true);
             if (record is null)
@@ -241,28 +243,19 @@ public sealed class SessionBrowseService
             return Array.Empty<CaptureRecord>();
         }
 
-        var capturesRoot = Path.Combine(sessionFolderPath, "captures");
-        if (!Directory.Exists(capturesRoot))
+        var metadataPaths = GetSessionCaptureMetadataPaths(sessionFolderPath);
+        if (metadataPaths.Count == 0)
         {
             return Array.Empty<CaptureRecord>();
         }
 
         var records = new List<CaptureRecord>(Math.Min(maxCount, 24));
-        var captureDirectories = Directory.EnumerateDirectories(capturesRoot)
-            .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        foreach (var captureDirectory in captureDirectories)
+        foreach (var jsonPath in metadataPaths
+                     .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
         {
             if (records.Count >= maxCount)
             {
                 break;
-            }
-
-            var jsonPath = Path.Combine(captureDirectory, "capture.json");
-            if (!File.Exists(jsonPath))
-            {
-                continue;
             }
 
             var record = TryLoadRecordFromJsonPath(jsonPath, sessionFolderPath, applyLinkedAnnotationOverrides: false);
@@ -291,6 +284,48 @@ public sealed class SessionBrowseService
         }
     }
 
+    public IReadOnlyList<string> GetSessionCaptureMetadataPaths(string sessionFolderPath)
+    {
+        if (string.IsNullOrWhiteSpace(sessionFolderPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        var capturesRoot = Path.Combine(sessionFolderPath, "captures");
+        if (!Directory.Exists(capturesRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        var manifestPaths = GetCaptureMetadataPathsFromManifest(sessionFolderPath);
+        if (manifestPaths.Count > 0)
+        {
+            return manifestPaths;
+        }
+
+        try
+        {
+            var legacyPaths = Directory.EnumerateFiles(capturesRoot, "capture.json", SearchOption.AllDirectories)
+                .Where(path => !IsPendingDeletePath(path))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (legacyPaths.Length > 0)
+            {
+                return legacyPaths;
+            }
+
+            return Directory.EnumerateFiles(capturesRoot, "*.json", SearchOption.TopDirectoryOnly)
+                .Where(path => !IsPendingDeletePath(path))
+                .Where(path => !string.Equals(Path.GetFileName(path), "session.json", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     private CaptureRecord? TryLoadRecordFromJsonPath(string jsonPath, string sessionFolderPath, bool applyLinkedAnnotationOverrides)
     {
         try
@@ -307,24 +342,32 @@ public sealed class SessionBrowseService
                 return null;
             }
 
-            var folder = Path.GetDirectoryName(jsonPath) ?? string.Empty;
-            metadata.CaptureDirectory = folder;
+            var metadataDirectory = Path.GetDirectoryName(jsonPath) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(metadata.CaptureDirectory))
+            {
+                metadata.CaptureDirectory = metadataDirectory;
+            }
+            else
+            {
+                metadata.CaptureDirectory = ResolveStoredPath(metadata.CaptureDirectory, sessionFolderPath);
+            }
+
             metadata.JsonPath = jsonPath;
-            metadata.CaptureType = NormalizeCaptureType(metadata.CaptureType, folder, metadata);
-            metadata.ImagePath = ResolvePath(metadata.ImagePath, folder, "capture.png");
-            metadata.VideoPath = ResolvePath(metadata.VideoPath, folder, "capture.mp4");
-            metadata.ThumbnailPath = ResolvePath(metadata.ThumbnailPath, folder, "thumbnail.png");
+            metadata.CaptureType = NormalizeCaptureType(metadata.CaptureType, metadataDirectory, metadata);
+            metadata.ImagePath = ResolvePath(metadata.ImagePath, metadataDirectory, metadata.CaptureDirectory, "capture.png");
+            metadata.VideoPath = ResolvePath(metadata.VideoPath, metadataDirectory, metadata.CaptureDirectory, "capture.mp4");
+            metadata.ThumbnailPath = ResolvePath(metadata.ThumbnailPath, metadataDirectory, metadata.CaptureDirectory, "thumbnail.png");
             if (string.Equals(metadata.CaptureType, "video", StringComparison.OrdinalIgnoreCase))
             {
                 if (!File.Exists(metadata.VideoPath))
                 {
-                    metadata.VideoPath = Path.Combine(folder, "capture.mp4");
+                    metadata.VideoPath = Path.Combine(metadataDirectory, "capture.mp4");
                 }
 
                 if (!File.Exists(metadata.ThumbnailPath))
                 {
-                    var fallbackThumb = Path.Combine(folder, "thumbnail.png");
-                    var fallbackPng = Path.Combine(folder, "capture.png");
+                    var fallbackThumb = Path.Combine(metadataDirectory, "thumbnail.png");
+                    var fallbackPng = Path.Combine(metadataDirectory, "capture.png");
                     metadata.ThumbnailPath = File.Exists(fallbackThumb)
                         ? fallbackThumb
                         : (File.Exists(fallbackPng) ? fallbackPng : string.Empty);
@@ -332,7 +375,7 @@ public sealed class SessionBrowseService
             }
             else if (!File.Exists(metadata.ImagePath))
             {
-                metadata.ImagePath = Path.Combine(folder, "capture.png");
+                metadata.ImagePath = Path.Combine(metadataDirectory, "capture.png");
             }
 
             if (metadata.LocalTimestamp == default)
@@ -500,49 +543,52 @@ public sealed class SessionBrowseService
         return FindBestPreviewFileInDirectory(normalized);
     }
 
+    private static string ResolveManifestCapturePreviewPath(JsonElement capture, string sessionFolder)
+    {
+        var thumbnailPath = TryReadString(capture, "ExportedThumbnailPath");
+        if (!string.IsNullOrWhiteSpace(thumbnailPath))
+        {
+            var resolvedThumbnailPath = ResolveStoredPath(thumbnailPath, sessionFolder);
+            if (File.Exists(resolvedThumbnailPath))
+            {
+                return resolvedThumbnailPath;
+            }
+        }
+
+        var mediaPath = TryReadString(capture, "ExportedMediaPath");
+        if (string.IsNullOrWhiteSpace(mediaPath))
+        {
+            return string.Empty;
+        }
+
+        var resolvedMediaPath = ResolveStoredPath(mediaPath, sessionFolder);
+        return File.Exists(resolvedMediaPath) && ImageFileExtensions.Contains(Path.GetExtension(resolvedMediaPath))
+            ? resolvedMediaPath
+            : string.Empty;
+    }
+
     private static string FindSessionPreviewImagePath(string sessionFolder)
     {
         try
         {
-            var capturesRoot = Path.Combine(sessionFolder, "captures");
-            if (!Directory.Exists(capturesRoot))
+            var service = new SessionBrowseService();
+            var metadataPaths = service.GetSessionCaptureMetadataPaths(sessionFolder);
+            foreach (var jsonPath in metadataPaths.OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
             {
-                return string.Empty;
-            }
-
-            var captureDirectories = Directory.EnumerateDirectories(capturesRoot)
-                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            foreach (var captureDirectory in captureDirectories)
-            {
-                var previewFromDirectory = FindBestPreviewFileInDirectory(captureDirectory);
-                if (!string.IsNullOrWhiteSpace(previewFromDirectory))
+                var record = service.TryLoadRecordFromJsonPath(jsonPath, sessionFolder, applyLinkedAnnotationOverrides: false);
+                if (record is null || !HasValidMediaFile(record))
                 {
-                    return previewFromDirectory;
+                    continue;
+                }
+
+                var previewPath = record.IsVideo ? record.ThumbnailPath : record.ImagePath;
+                if (!string.IsNullOrWhiteSpace(previewPath) && File.Exists(previewPath))
+                {
+                    return previewPath;
                 }
             }
 
-            string? latestImagePath = null;
-            DateTime latestWriteTimeUtc = DateTime.MinValue;
-            foreach (var imagePath in Directory.EnumerateFiles(capturesRoot, "*.*", SearchOption.AllDirectories)
-                         .Where(path => ImageFileExtensions.Contains(Path.GetExtension(path))))
-            {
-                try
-                {
-                    var writeTime = File.GetLastWriteTimeUtc(imagePath);
-                    if (writeTime > latestWriteTimeUtc)
-                    {
-                        latestWriteTimeUtc = writeTime;
-                        latestImagePath = imagePath;
-                    }
-                }
-                catch
-                {
-                    // Ignore inaccessible files.
-                }
-            }
-
-            return latestImagePath ?? string.Empty;
+            return string.Empty;
         }
         catch
         {
@@ -588,7 +634,8 @@ public sealed class SessionBrowseService
             return new List<string>();
         }
 
-        foreach (var jsonPath in SafeEnumerateCaptureJsonFiles(capturesRoot))
+        var service = new SessionBrowseService();
+        foreach (var jsonPath in service.GetSessionCaptureMetadataPaths(sessionFolder))
         {
             try
             {
@@ -648,15 +695,20 @@ public sealed class SessionBrowseService
 
     private static string ResolvePath(string path, string folder, string fallbackName)
     {
+        return ResolvePath(path, folder, folder, fallbackName);
+    }
+
+    private static string ResolvePath(string path, string metadataDirectory, string fallbackDirectory, string fallbackName)
+    {
         var normalized = (path ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(normalized))
         {
-            return Path.Combine(folder, fallbackName);
+            return Path.Combine(fallbackDirectory, fallbackName);
         }
 
         if (!Path.IsPathRooted(normalized))
         {
-            normalized = Path.Combine(folder, normalized);
+            normalized = Path.Combine(metadataDirectory, normalized.Replace('/', Path.DirectorySeparatorChar));
         }
 
         return normalized;
@@ -713,17 +765,76 @@ public sealed class SessionBrowseService
         }
     }
 
-    private static IEnumerable<string> SafeEnumerateCaptureJsonFiles(string capturesRoot)
+    private static string ResolveStoredPath(string path, string sessionFolderPath)
     {
-        if (string.IsNullOrWhiteSpace(capturesRoot) || !Directory.Exists(capturesRoot))
+        var normalized = (path ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        if (!Path.IsPathRooted(normalized))
+        {
+            normalized = Path.Combine(sessionFolderPath, normalized.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        return Path.GetFullPath(normalized);
+    }
+
+    private static IReadOnlyList<string> GetCaptureMetadataPathsFromManifest(string sessionFolderPath)
+    {
+        var manifestPath = Path.Combine(sessionFolderPath, "session.json");
+        if (!File.Exists(manifestPath))
         {
             return Array.Empty<string>();
         }
 
         try
         {
-            return Directory.EnumerateFiles(capturesRoot, "capture.json", SearchOption.AllDirectories)
-                .Where(path => !IsPendingDeletePath(path))
+            var manifestJson = ReadAllTextAllowShared(manifestPath);
+            if (string.IsNullOrWhiteSpace(manifestJson))
+            {
+                return Array.Empty<string>();
+            }
+
+            using var document = JsonDocument.Parse(manifestJson);
+            if (!document.RootElement.TryGetProperty("Captures", out var capturesElement) ||
+                capturesElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<string>();
+            }
+
+            var metadataPaths = new List<string>();
+            foreach (var capture in capturesElement.EnumerateArray())
+            {
+                var exportedMetadataPath = TryReadString(capture, "ExportedMetadataPath");
+                if (!string.IsNullOrWhiteSpace(exportedMetadataPath))
+                {
+                    var resolvedMetadataPath = ResolveStoredPath(exportedMetadataPath, sessionFolderPath);
+                    if (File.Exists(resolvedMetadataPath))
+                    {
+                        metadataPaths.Add(resolvedMetadataPath);
+                        continue;
+                    }
+                }
+
+                var legacyCaptureDirectory = TryReadString(capture, "ExportedCaptureDirectory");
+                if (string.IsNullOrWhiteSpace(legacyCaptureDirectory))
+                {
+                    continue;
+                }
+
+                var resolvedDirectory = ResolveStoredPath(legacyCaptureDirectory, sessionFolderPath);
+                var legacyJsonPath = Path.Combine(resolvedDirectory, "capture.json");
+                if (File.Exists(legacyJsonPath))
+                {
+                    metadataPaths.Add(legacyJsonPath);
+                }
+            }
+
+            return metadataPaths
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
         catch
