@@ -137,6 +137,7 @@ public partial class App : System.Windows.Application
     private void NormalizeSettings()
     {
         _settings.PenSizes ??= new PenSizeSettings();
+        _settings.CustomPenColor = NormalizeCustomPenColor(_settings.CustomPenColor);
         _settings.Hotkeys ??= new Dictionary<string, HotkeyDefinition>(StringComparer.OrdinalIgnoreCase);
         _settings.Projects ??= new List<string>();
         _settings.Users ??= new List<string>();
@@ -188,9 +189,28 @@ public partial class App : System.Windows.Application
 
     private void InitializeOverlay()
     {
-        _overlayWindow = new OverlayWindow(_settings.PenSizes);
+        _overlayWindow = new OverlayWindow(_settings.PenSizes, _settings.CustomPenColor);
+        _overlayWindow.CustomColorChanged += OverlayWindowOnCustomColorChanged;
         _overlayWindow.Show();
         _overlayWindow.SetDrawingMode(false);
+    }
+
+    private async void OverlayWindowOnCustomColorChanged(object? sender, string colorText)
+    {
+        _settings.CustomPenColor = NormalizeCustomPenColor(colorText);
+
+        try
+        {
+            await _settingsService.SaveAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Warn("Overlay.CustomColor.SaveFailed", "Failed to persist custom overlay color.", new
+            {
+                Color = _settings.CustomPenColor,
+                ex.Message
+            });
+        }
     }
 
     private void InitializeMainWindow()
@@ -1082,6 +1102,24 @@ public partial class App : System.Windows.Application
     private static string BuildDefaultSessionName(DateTime startLocal)
     {
         return $"Review_{startLocal:yyyyMMdd_HHmm}";
+    }
+
+    private static string NormalizeCustomPenColor(string? colorText)
+    {
+        if (string.IsNullOrWhiteSpace(colorText))
+        {
+            return "#FFFFEA00";
+        }
+
+        try
+        {
+            var parsed = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorText);
+            return parsed.ToString();
+        }
+        catch
+        {
+            return "#FFFFEA00";
+        }
     }
 
     private static void DeleteCaptureRecordFiles(CaptureRecord record)

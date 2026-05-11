@@ -7,6 +7,7 @@ public sealed class AppSettings
     public string StorageRoot { get; set; } = string.Empty;
     public bool ClearOverlayAfterCapture { get; set; } = true;
     public PenSizeSettings PenSizes { get; set; } = new();
+    public string CustomPenColor { get; set; } = "#FFFFEA00";
     public Dictionary<string, HotkeyDefinition> Hotkeys { get; set; } = CreateDefaultHotkeys();
     public List<string> Projects { get; set; } = new();
     public string ActiveProject { get; set; } = string.Empty;

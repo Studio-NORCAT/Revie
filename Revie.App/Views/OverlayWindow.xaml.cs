@@ -9,12 +9,14 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using Revie.App.Models;
 using Revie.App.Native;
+using Forms = System.Windows.Forms;
 
 namespace Revie.App.Views;
 
 public partial class OverlayWindow : Window
 {
     private const double ToolbarInset = 14;
+    private static readonly System.Windows.Media.Color DefaultCustomColor = Colors.Yellow;
     private static readonly System.Windows.Media.Brush HitTestBackground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, 0, 0, 0));
     private static readonly System.Windows.Media.Brush TransparentBackground = System.Windows.Media.Brushes.Transparent;
     private readonly DrawingAttributes _drawingAttributes = new();
@@ -22,19 +24,22 @@ public partial class OverlayWindow : Window
     private IntPtr _windowHandle;
     private bool _isDrawingMode;
     private PenSizeSettings _penSizeSettings;
+    private System.Windows.Media.Color _customColor;
 
-    public OverlayWindow(PenSizeSettings penSizeSettings)
+    public OverlayWindow(PenSizeSettings penSizeSettings, string? customPenColor)
     {
         _penSizeSettings = penSizeSettings;
+        _customColor = ParseColorOrDefault(customPenColor, DefaultCustomColor);
         InitializeComponent();
 
-        _drawingAttributes.Color = Colors.Yellow;
+        _drawingAttributes.Color = DefaultCustomColor;
         _drawingAttributes.Width = _penSizeSettings.Medium;
         _drawingAttributes.Height = _penSizeSettings.Medium;
         _drawingAttributes.FitToCurve = true;
 
         InkSurface.DefaultDrawingAttributes = _drawingAttributes;
         InkSurface.EditingMode = InkCanvasEditingMode.None;
+        UpdateCustomColorSwatch();
 
         Loaded += (_, _) =>
         {
@@ -71,6 +76,7 @@ public partial class OverlayWindow : Window
     }
 
     public bool IsDrawingMode => _isDrawingMode;
+    public event EventHandler<string>? CustomColorChanged;
 
     public void ToggleDrawingMode()
     {
@@ -315,10 +321,30 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorText);
-        _drawingAttributes.Color = color;
-        InkSurface.EditingMode = InkCanvasEditingMode.Ink;
-        EraserToggle.IsChecked = false;
+        var color = ParseColorOrDefault(colorText, DefaultCustomColor);
+        ApplyInkColor(color);
+    }
+
+    private void CustomColorButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new Forms.ColorDialog
+        {
+            AllowFullOpen = true,
+            AnyColor = true,
+            FullOpen = true,
+            SolidColorOnly = false,
+            Color = System.Drawing.Color.FromArgb(_customColor.A, _customColor.R, _customColor.G, _customColor.B)
+        };
+
+        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        _customColor = System.Windows.Media.Color.FromArgb(dialog.Color.A, dialog.Color.R, dialog.Color.G, dialog.Color.B);
+        UpdateCustomColorSwatch();
+        ApplyInkColor(_customColor);
+        CustomColorChanged?.Invoke(this, _customColor.ToString());
     }
 
     private void SizeButton_OnClick(object sender, RoutedEventArgs e)
@@ -355,6 +381,41 @@ public partial class OverlayWindow : Window
     private void ClearButton_OnClick(object sender, RoutedEventArgs e)
     {
         ClearStrokes();
+    }
+
+    private void ApplyInkColor(System.Windows.Media.Color color)
+    {
+        _drawingAttributes.Color = color;
+        InkSurface.EditingMode = InkCanvasEditingMode.Ink;
+        EraserToggle.IsChecked = false;
+    }
+
+    private static System.Windows.Media.Color ParseColorOrDefault(string? colorText, System.Windows.Media.Color fallback)
+    {
+        if (string.IsNullOrWhiteSpace(colorText))
+        {
+            return fallback;
+        }
+
+        try
+        {
+            return (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorText);
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private void UpdateCustomColorSwatch()
+    {
+        if (CustomColorButton is null)
+        {
+            return;
+        }
+
+        CustomColorButton.Background = new SolidColorBrush(_customColor);
+        CustomColorButton.BorderBrush = new SolidColorBrush(_customColor == Colors.White ? Colors.Gray : Colors.Black);
     }
 
     private sealed class ToolbarSuppression : IDisposable
