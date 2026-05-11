@@ -20,6 +20,8 @@ public partial class OverlayWindow : Window
     private static readonly System.Windows.Media.Brush HitTestBackground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, 0, 0, 0));
     private static readonly System.Windows.Media.Brush TransparentBackground = System.Windows.Media.Brushes.Transparent;
     private readonly DrawingAttributes _drawingAttributes = new();
+    private readonly List<ToggleButton> _colorButtons = new();
+    private readonly List<ToggleButton> _sizeButtons = new();
     private HwndSource? _hwndSource;
     private IntPtr _windowHandle;
     private bool _isDrawingMode;
@@ -32,6 +34,23 @@ public partial class OverlayWindow : Window
         _customColor = ParseColorOrDefault(customPenColor, DefaultCustomColor);
         InitializeComponent();
 
+        _colorButtons.AddRange(new[]
+        {
+            RedColorButton,
+            GreenColorButton,
+            BlueColorButton,
+            YellowColorButton,
+            WhiteColorButton,
+            BlackColorButton,
+            CustomColorButton
+        });
+        _sizeButtons.AddRange(new[]
+        {
+            SmallSizeButton,
+            MediumSizeButton,
+            LargeSizeButton
+        });
+
         _drawingAttributes.Color = DefaultCustomColor;
         _drawingAttributes.Width = _penSizeSettings.Medium;
         _drawingAttributes.Height = _penSizeSettings.Medium;
@@ -40,6 +59,8 @@ public partial class OverlayWindow : Window
         InkSurface.DefaultDrawingAttributes = _drawingAttributes;
         InkSurface.EditingMode = InkCanvasEditingMode.None;
         UpdateCustomColorSwatch();
+        SetSelectedToggle(_colorButtons, YellowColorButton);
+        SetSelectedToggle(_sizeButtons, MediumSizeButton);
 
         Loaded += (_, _) =>
         {
@@ -316,16 +337,23 @@ public partial class OverlayWindow : Window
 
     private void ColorButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.Button button || button.Tag is not string colorText)
+        if (sender is not ToggleButton button || button.Tag is not string colorText)
         {
             return;
         }
 
         var color = ParseColorOrDefault(colorText, DefaultCustomColor);
         ApplyInkColor(color);
+        SetSelectedToggle(_colorButtons, button);
     }
 
-    private void CustomColorButton_OnClick(object sender, RoutedEventArgs e)
+    private void CustomColorSelect_OnClick(object sender, RoutedEventArgs e)
+    {
+        ApplyInkColor(_customColor);
+        SetSelectedToggle(_colorButtons, CustomColorButton);
+    }
+
+    private void CustomColorPickerButton_OnClick(object sender, RoutedEventArgs e)
     {
         using var dialog = new Forms.ColorDialog
         {
@@ -344,12 +372,13 @@ public partial class OverlayWindow : Window
         _customColor = System.Windows.Media.Color.FromArgb(dialog.Color.A, dialog.Color.R, dialog.Color.G, dialog.Color.B);
         UpdateCustomColorSwatch();
         ApplyInkColor(_customColor);
+        SetSelectedToggle(_colorButtons, CustomColorButton);
         CustomColorChanged?.Invoke(this, _customColor.ToString());
     }
 
     private void SizeButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.Button button || button.Tag is not string sizeName)
+        if (sender is not ToggleButton button || button.Tag is not string sizeName)
         {
             return;
         }
@@ -366,6 +395,7 @@ public partial class OverlayWindow : Window
         _drawingAttributes.Height = value;
         InkSurface.EditingMode = InkCanvasEditingMode.Ink;
         EraserToggle.IsChecked = false;
+        SetSelectedToggle(_sizeButtons, button);
     }
 
     private void EraserToggle_OnChecked(object sender, RoutedEventArgs e)
@@ -416,6 +446,14 @@ public partial class OverlayWindow : Window
 
         CustomColorButton.Background = new SolidColorBrush(_customColor);
         CustomColorButton.BorderBrush = new SolidColorBrush(_customColor == Colors.White ? Colors.Gray : Colors.Black);
+    }
+
+    private static void SetSelectedToggle(IEnumerable<ToggleButton> buttons, ToggleButton selectedButton)
+    {
+        foreach (var button in buttons)
+        {
+            button.IsChecked = ReferenceEquals(button, selectedButton);
+        }
     }
 
     private sealed class ToolbarSuppression : IDisposable
