@@ -1,5 +1,7 @@
 # Revie
 
+[![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
+
 Revie is a local review tool for teams working with visual content. It lets users draw on top of their screen, capture screenshots or video recordings with notes, and organize everything into review sessions so feedback, decisions, and collaboration work stay easy to track without relying on cloud storage.
 
 <p align="center">
@@ -201,3 +203,11 @@ Files:
   - `%AppData%\Revie\backups\`
 - Runtime logs are written to:
   - `%AppData%\Revie\logs\revie-YYYYMMDD.log`
+
+## License
+
+This repository is licensed under the **Creative Commons Attribution 4.0 International (CC BY 4.0)** license.
+
+- You may share and adapt the material for any purpose, even commercially.
+- You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+- See the [LICENSE](LICENSE) file for the full license text.
