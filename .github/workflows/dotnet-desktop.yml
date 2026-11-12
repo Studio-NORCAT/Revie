@@ -27,10 +27,10 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Install .NET SDK
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -45,7 +45,7 @@ jobs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: test-results
         path: TestResults
@@ -69,15 +69,17 @@ jobs:
       run: wix build packaging/RevieBundle.wxs -d MsiPath="$env:GITHUB_WORKSPACE/dist/Revie-Installer.msi" -ext WixToolset.BootstrapperApplications.wixext -o dist/Revie-Installer.exe
 
     - name: Upload installer
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: Revie-Installer
         path: |
           dist/Revie-Installer.exe
           dist/Revie-Installer.msi
+        retention-days: 14
 
     - name: Upload portable build
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: Revie-portable-win-x64
         path: dist/publish/installer-win-x64
+        retention-days: 14
