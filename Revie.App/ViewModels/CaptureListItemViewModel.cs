@@ -8,19 +8,26 @@ namespace Revie.App.ViewModels;
 
 public sealed class CaptureListItemViewModel : ObservableObject
 {
-    private static readonly ImageSource EmptyImageSource = new BitmapImage();
+    private static readonly ImageSource EmptyImageSource = CreateEmptyImageSource();
+    private static readonly SemaphoreSlim PreviewLoadSlots = new(2, 2);
     private ImageSource? _thumbnail;
-    private ImageSource? _previewImage;
+    private bool _thumbnailLoadStarted;
+    private volatile ImageSource? _previewImage;
+    private readonly object _previewLoadLock = new();
+    private Task<ImageSource>? _previewLoadTask;
+    private int _previewVersion;
     private string _previewOverridePath = string.Empty;
     private string _note;
     private string _project;
     private string _reviewState;
+    private string _activeUser;
     private List<string> _assignedUsers;
     private string _userTagsText;
 
-    public CaptureListItemViewModel(CaptureRecord record)
+    public CaptureListItemViewModel(CaptureRecord record, string activeUser = "")
     {
         Record = record;
+        _activeUser = activeUser;
         _note = record.Metadata.Note ?? string.Empty;
         _project = record.Metadata.Project ?? string.Empty;
         _reviewState = Revie.App.Models.ReviewState.Normalize(record.Metadata.ReviewState);
@@ -35,6 +42,8 @@ public sealed class CaptureListItemViewModel : ObservableObject
     }
 
     public CaptureRecord Record { get; }
+    public bool IsDeleted { get; private set; }
+    public void MarkDeleted() => IsDeleted = true;
     public DateTime LocalTimestamp => Record.LocalTimestamp;
     public string DayGroup => LocalTimestamp.ToString("yyyy-MM-dd ddd");
     public string TimeLabel => LocalTimestamp.ToString("HH:mm:ss.fff");
@@ -45,6 +54,18 @@ public sealed class CaptureListItemViewModel : ObservableObject
     public string CaptureTypeDisplay => IsVideo ? "Video" : "Image";
     public string CaptureTypeGlyph => IsVideo ? "\uE714" : "\uE91B";
     public bool HasNote => !string.IsNullOrWhiteSpace(Note);
+    public bool HasRevisedUploads => Record.Metadata.UploadedImagePaths is { Count: > 0 };
+    public bool IsRevisionReviewRequestedForLocalUser => RevisionReviewState.IsPendingForUser(Record.Metadata, _activeUser);
+    public void RefreshRevisionReviewState()
+    {
+        OnPropertyChanged(nameof(HasRevisedUploads));
+        OnPropertyChanged(nameof(IsRevisionReviewRequestedForLocalUser));
+    }
+    public void SetActiveUser(string activeUser)
+    {
+        _activeUser = activeUser ?? string.Empty;
+        OnPropertyChanged(nameof(IsRevisionReviewRequestedForLocalUser));
+    }
     public string Note
     {
         get => _note;
@@ -156,16 +177,106 @@ public sealed class CaptureListItemViewModel : ObservableObject
     public string ImagePath => Record.ImagePath;
     public string VideoPath => Record.VideoPath;
     public string MediaPath => IsVideo ? VideoPath : ImagePath;
-    public ImageSource Thumbnail => _thumbnail ??= LoadImage(GetThumbnailPath(), 160);
+    public ImageSource Thumbnail
+    {
+        get
+        {
+            if (!_thumbnailLoadStarted)
+            {
+                _thumbnailLoadStarted = true;
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        var source = GetThumbnailPath();
+                        var thumbnailPath = source.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+                            ? source
+                            : SidebarThumbnailService.EnsureThumbnail(source, Record.CaptureDirectory);
+                        var image = LoadImage(thumbnailPath, 160);
+                        if (!SafeImagePathConverter.IsUsableImage(image) &&
+                            !IsVideo && File.Exists(Record.ImagePath) &&
+                            !string.Equals(thumbnailPath, Record.ImagePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            image = LoadImage(Record.ImagePath, 160);
+                        }
+                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                        {
+                            _thumbnail = image;
+                            OnPropertyChanged(nameof(Thumbnail));
+                        });
+                    }
+                    catch
+                    {
+                        // A preview failure should leave the capture navigable.
+                    }
+                });
+            }
+            return _thumbnail ?? EmptyImageSource;
+        }
+    }
 
     public ImageSource PreviewImage
     {
         get
         {
-            _previewImage ??= LoadImage(GetPreviewPath(), 0);
-            return _previewImage;
+            if (_previewImage is not null) return _previewImage;
+            _ = EnsurePreviewLoadedAsync();
+            return EmptyImageSource;
         }
     }
+
+    public async Task EnsurePreviewLoadedAsync()
+    {
+        Task<ImageSource> loadTask;
+        int version;
+        lock (_previewLoadLock)
+        {
+            if (_previewImage is not null) return;
+            version = _previewVersion;
+            loadTask = _previewLoadTask ??= Task.Run(() =>
+            {
+                PreviewLoadSlots.Wait();
+                try
+                {
+                    lock (_previewLoadLock)
+                    {
+                        if (version != _previewVersion) return EmptyImageSource;
+                    }
+                    return LoadImage(GetPreviewPath(), 0);
+                }
+                catch
+                {
+                    return EmptyImageSource;
+                }
+                finally
+                {
+                    PreviewLoadSlots.Release();
+                }
+            });
+        }
+
+        var image = await loadTask.ConfigureAwait(false);
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        try
+        {
+            await dispatcher.InvokeAsync(() =>
+            {
+                lock (_previewLoadLock)
+                {
+                    if (version != _previewVersion || _previewImage is not null) return;
+                    _previewImage = image;
+                }
+                OnPropertyChanged(nameof(PreviewImage));
+            });
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or InvalidOperationException)
+        {
+            // The window is closing.
+        }
+    }
+
+    public void ReleasePreviewImage() => InvalidatePreviewImage();
 
     public string SearchBlob => $"{Record.Metadata.Note ?? string.Empty} {Record.Metadata.ActiveWindowTitle ?? string.Empty} {Record.Metadata.ActiveProcessName ?? string.Empty} {Record.Metadata.Project ?? string.Empty} {string.Join(' ', _assignedUsers)} {CaptureTypeDisplay}";
 
@@ -184,14 +295,18 @@ public sealed class CaptureListItemViewModel : ObservableObject
         {
             Record.Metadata.ImagePath = imagePath;
             Record.Metadata.VideoPath = string.Empty;
-            Record.Metadata.ThumbnailPath = Record.Metadata.ImagePath;
+            Record.Metadata.ThumbnailPath = Path.Combine(captureDirectory, SidebarThumbnailService.FileName);
         }
 
         Record.Metadata.JsonPath = jsonPath;
+        _thumbnail = null;
+        _thumbnailLoadStarted = false;
+        InvalidatePreviewImage();
         OnPropertyChanged(nameof(CaptureDirectory));
         OnPropertyChanged(nameof(ImagePath));
         OnPropertyChanged(nameof(VideoPath));
         OnPropertyChanged(nameof(MediaPath));
+        OnPropertyChanged(nameof(Thumbnail));
         OnPropertyChanged(nameof(PreviewImage));
     }
 
@@ -204,8 +319,18 @@ public sealed class CaptureListItemViewModel : ObservableObject
         }
 
         _previewOverridePath = normalized;
-        _previewImage = null;
+        InvalidatePreviewImage();
         OnPropertyChanged(nameof(PreviewImage));
+    }
+
+    private void InvalidatePreviewImage()
+    {
+        lock (_previewLoadLock)
+        {
+            _previewVersion++;
+            _previewImage = null;
+            _previewLoadTask = null;
+        }
     }
 
     private string GetPreviewPath()
@@ -255,7 +380,10 @@ public sealed class CaptureListItemViewModel : ObservableObject
             return thumb;
         }
 
-        return Record.ImagePath;
+        var imageThumbnail = Record.Metadata.ThumbnailPath;
+        return !string.IsNullOrWhiteSpace(imageThumbnail) && File.Exists(imageThumbnail)
+            ? imageThumbnail
+            : Record.ImagePath;
     }
 
     private static bool SequenceEqualUsers(IReadOnlyList<string> left, IReadOnlyList<string> right)
@@ -314,6 +442,13 @@ public sealed class CaptureListItemViewModel : ObservableObject
         }
 
         return EmptyImageSource;
+    }
+
+    private static ImageSource CreateEmptyImageSource()
+    {
+        var image = new BitmapImage();
+        image.Freeze();
+        return image;
     }
 
     private static FileStream OpenReadStream(string path)

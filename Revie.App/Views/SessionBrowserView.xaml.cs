@@ -10,17 +10,19 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Revie.App.Models;
+using Revie.App.Infrastructure;
 using Revie.App.Services;
 using Revie.App.ViewModels;
 
 namespace Revie.App.Views;
 
-public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
+public partial class SessionBrowserView : System.Windows.Controls.UserControl, INotifyPropertyChanged
 {
     private const string AllProjectsLabel = "(All Projects)";
     private const string NoProjectLabel = "(No Project)";
     private const string AllUsersLabel = "(All Users)";
     private const string NoUserLabel = "(No User)";
+    private const string NoReviewerLabel = "(No reviewer)";
     private const string UploadsFolderName = "user-uploads";
     private static readonly HashSet<string> SupportedUploadImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -41,17 +43,22 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private readonly SessionNotificationService _sessionNotificationService = new();
     private readonly List<string> _configuredProjects;
     private readonly List<string> _configuredUsers;
+    private string _activeUser;
     private readonly List<SessionFolderSummary> _allSessions = new();
     private SessionNotificationState _sessionNotificationState = new();
     private readonly DispatcherTimer _sessionNoteSavedFeedbackTimer;
+    private readonly DispatcherTimer _sessionNoteSaveTimer;
     private readonly DispatcherTimer _sessionVideoPositionTimer;
     private readonly DispatcherTimer _sessionVideoToolbarFadeTimer;
     private int _sessionRefreshRequestId;
+    private bool _sessionRefreshInProgress;
+    private bool _sessionCacheAttempted;
     private CancellationTokenSource? _sessionPreviewLoadCts;
     private int _sessionPreviewRequestId;
     private string _selectedSessionProjectFilter = AllProjectsLabel;
     private string _selectedSessionUserFilter = AllUsersLabel;
     private string _selectedCaptureUserChoice = NoUserLabel;
+    private string _selectedReviewRecipient = NoReviewerLabel;
     private int _selectedCaptureCompareTabIndex;
     private CapturePreviewVariant? _selectedCapturePreviewVariant;
     private CapturePreviewVariant? _selectedUploadedCapturePreviewVariant;
@@ -72,6 +79,11 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private bool _isSessionVideoToolbarHovered;
     private bool _isSessionPreviewFullscreen;
     private bool _isBusy;
+    private bool _isImportingCaptureImages;
+    private bool _isUpdatingRevisionReview;
+    private bool _isNavigatingBack;
+    private CaptureListItemViewModel? _pendingSessionNoteCapture;
+    private Task<bool>? _sessionNoteSaveInFlight;
     private readonly GridLength _defaultSessionTopRowHeight;
     private readonly GridLength _defaultSessionBottomRowHeight;
     private readonly GridLength _defaultSessionLeftColumnWidth;
@@ -82,9 +94,10 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     private double _panStartHorizontalOffset;
     private double _panStartVerticalOffset;
 
-    public SessionBrowserWindow(string storageRoot, IEnumerable<string>? configuredProjects = null, IEnumerable<string>? configuredUsers = null)
+    public SessionBrowserView(string storageRoot, IEnumerable<string>? configuredProjects = null, IEnumerable<string>? configuredUsers = null, string activeUser = "")
     {
         _storageRoot = storageRoot;
+        _activeUser = CaptureService.NormalizeUser(activeUser);
         _configuredProjects = (configuredProjects ?? Array.Empty<string>())
             .Where(project => !string.IsNullOrWhiteSpace(project))
             .Select(project => project.Trim())
@@ -99,13 +112,17 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             .ToList();
         _sessionNotificationState = _sessionNotificationService.Load();
 
-        Sessions = new ObservableCollection<SessionFolderSummary>();
+        Sessions = new RangeObservableCollection<SessionFolderSummary>();
         SessionProjectFilterChoices = new ObservableCollection<string>();
         SessionUserFilterChoices = new ObservableCollection<string>();
         SessionUserChoices = new ObservableCollection<string> { NoUserLabel };
+        ReviewRecipientChoices = new ObservableCollection<string>(new[] { NoReviewerLabel }
+            .Concat(_configuredUsers)
+            .Concat(string.IsNullOrWhiteSpace(_activeUser) ? Array.Empty<string>() : new[] { _activeUser })
+            .Distinct(StringComparer.OrdinalIgnoreCase));
         SessionContextProjectChoices = new ObservableCollection<string> { NoProjectLabel };
         SessionContextUserChoices = new ObservableCollection<string> { NoUserLabel };
-        SessionCaptures = new ObservableCollection<CaptureListItemViewModel>();
+        SessionCaptures = new RangeObservableCollection<CaptureListItemViewModel>();
         SessionPreviewCaptures = new ObservableCollection<CaptureListItemViewModel>();
         CapturePreviewVariants = new ObservableCollection<CapturePreviewVariant>();
         UploadedCapturePreviewVariants = new ObservableCollection<CapturePreviewVariant>();
@@ -113,7 +130,13 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         SessionCaptures.CollectionChanged += OnSessionCapturesCollectionChanged;
         SessionPreviewCaptures.CollectionChanged += OnSessionPreviewCapturesCollectionChanged;
         CapturePreviewVariants.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CaptureUploadHintText));
-        UploadedCapturePreviewVariants.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CaptureUploadHintText));
+        UploadedCapturePreviewVariants.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(CaptureUploadHintText));
+            OnPropertyChanged(nameof(HasSelectedRevisedUploads));
+            OnPropertyChanged(nameof(RevisedUploadCountText));
+            OnPropertyChanged(nameof(IsRevisedUploadEmpty));
+        };
         Sessions.CollectionChanged += OnSessionsCollectionChanged;
         _sessionNoteSavedFeedbackTimer = new DispatcherTimer
         {
@@ -123,6 +146,11 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         {
             _sessionNoteSavedFeedbackTimer.Stop();
             IsSessionNoteSavedVisible = false;
+        };
+        _sessionNoteSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        _sessionNoteSaveTimer.Tick += async (_, _) =>
+        {
+            if (await FlushPendingSessionNoteAsync()) ShowSessionNoteSavedFeedback();
         };
         _sessionVideoPositionTimer = new DispatcherTimer
         {
@@ -143,18 +171,60 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         _defaultSessionRootMargin = SessionWindowRootGrid.Margin;
         DataContext = this;
         Loaded += (_, _) => FitPreviewToViewport();
-        Closed += OnWindowClosed;
-        PreviewKeyDown += SessionBrowserWindow_OnPreviewKeyDown;
+        PreviewKeyDown += SessionBrowserView_OnPreviewKeyDown;
         RefreshSessions();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<int>? UnviewedSessionsCountChanged;
+    public event Action? HomeRequested;
+
+    public void UpdateReviewUsers(IEnumerable<string> users, string activeUser)
+    {
+        var selectedReviewer = SelectedReviewRecipient;
+        _activeUser = CaptureService.NormalizeUser(activeUser);
+        _configuredUsers.Clear();
+        _configuredUsers.AddRange((users ?? Array.Empty<string>())
+            .Where(user => !string.IsNullOrWhiteSpace(user))
+            .Select(user => user.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(user => user, StringComparer.OrdinalIgnoreCase));
+        ReviewRecipientChoices.Clear();
+        ReviewRecipientChoices.Add(NoReviewerLabel);
+        foreach (var user in _configuredUsers) ReviewRecipientChoices.Add(user);
+        if (!string.IsNullOrWhiteSpace(_activeUser) && !ReviewRecipientChoices.Contains(_activeUser, StringComparer.OrdinalIgnoreCase))
+            ReviewRecipientChoices.Add(_activeUser);
+        if (!string.IsNullOrWhiteSpace(selectedReviewer) && selectedReviewer != NoReviewerLabel &&
+            !ReviewRecipientChoices.Contains(selectedReviewer, StringComparer.OrdinalIgnoreCase))
+            ReviewRecipientChoices.Add(selectedReviewer);
+        SelectedReviewRecipient = ReviewRecipientChoices.FirstOrDefault(user =>
+            string.Equals(user, selectedReviewer, StringComparison.OrdinalIgnoreCase)) ?? NoReviewerLabel;
+        foreach (var session in _allSessions) session.ActiveUser = _activeUser;
+        foreach (var capture in SessionCaptures) capture.SetActiveUser(_activeUser);
+        OnPropertyChanged(nameof(CanMarkRevisionReviewed));
+        OnPropertyChanged(nameof(ActiveReviewUserLabel));
+    }
 
     public ObservableCollection<SessionFolderSummary> Sessions { get; }
     public ObservableCollection<string> SessionProjectFilterChoices { get; }
     public ObservableCollection<string> SessionUserFilterChoices { get; }
     public ObservableCollection<string> SessionUserChoices { get; }
+    public ObservableCollection<string> ReviewRecipientChoices { get; }
+    public string SelectedReviewRecipient
+    {
+        get => _selectedReviewRecipient;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value) ? NoReviewerLabel : value.Trim();
+            if (string.Equals(_selectedReviewRecipient, normalized, StringComparison.Ordinal)) return;
+            _selectedReviewRecipient = normalized;
+            OnPropertyChanged(nameof(SelectedReviewRecipient));
+        }
+    }
+    public bool CanMarkRevisionReviewed => SelectedCapture?.IsRevisionReviewRequestedForLocalUser == true;
+    public string ActiveReviewUserLabel => string.IsNullOrWhiteSpace(_activeUser)
+        ? "Set Active User in Settings to see your review requests."
+        : $"Local reviewer: {_activeUser}";
     public ObservableCollection<string> SessionContextProjectChoices { get; }
     public ObservableCollection<string> SessionContextUserChoices { get; }
     public ObservableCollection<CaptureListItemViewModel> SessionCaptures { get; }
@@ -346,10 +416,20 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
                 return;
             }
 
+            var previous = _selectedCapture;
+            _ = FlushPendingSessionNoteAsync();
             _selectedCapture = value;
+            previous?.ReleasePreviewImage();
             IsSessionNoteSavedVisible = false;
             SelectedCaptureUserChoice = ToCaptureUserChoice(value?.AssignedUser);
+            var requestedFor = value?.Record.Metadata.RevisionReviewRequestedForUser ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(requestedFor) &&
+                !ReviewRecipientChoices.Contains(requestedFor, StringComparer.OrdinalIgnoreCase))
+                ReviewRecipientChoices.Add(requestedFor);
+            SelectedReviewRecipient = ReviewRecipientChoices.FirstOrDefault(user =>
+                string.Equals(user, requestedFor, StringComparison.OrdinalIgnoreCase)) ?? NoReviewerLabel;
             RebuildCapturePreviewVariants(preferredPath: value?.ImagePath);
+            value?.RefreshRevisionReviewState();
             SetCaptureCompareTabIndex(0, applySelection: true);
             OnPropertyChanged(nameof(IsSelectedCaptureVideo));
             OnPropertyChanged(nameof(SelectedCapture));
@@ -359,6 +439,8 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(EmptyRightPaneVisible));
             OnPropertyChanged(nameof(EmptyRightPaneMessage));
             OnPropertyChanged(nameof(CanManageCaptureUploads));
+            OnPropertyChanged(nameof(IsRevisedUploadEmpty));
+            OnPropertyChanged(nameof(CanMarkRevisionReviewed));
             OnPropertyChanged(nameof(CaptureUploadHintText));
             OnPropertyChanged(nameof(IsReviewCompareTabActive));
             OnPropertyChanged(nameof(IsRevisedUploadTabActive));
@@ -386,6 +468,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
             _isInCaptureMode = value;
             OnPropertyChanged(nameof(IsInCaptureMode));
+            OnPropertyChanged(nameof(BackButtonText));
             OnPropertyChanged(nameof(OpenButtonText));
             OnPropertyChanged(nameof(HeaderTitle));
             OnPropertyChanged(nameof(LeftPaneTitle));
@@ -399,6 +482,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SessionPreviewEmptyVisible));
             OnPropertyChanged(nameof(SessionPreviewEmptyMessage));
             OnPropertyChanged(nameof(CanManageCaptureUploads));
+            OnPropertyChanged(nameof(IsRevisedUploadEmpty));
             OnPropertyChanged(nameof(CaptureUploadHintText));
             OnPropertyChanged(nameof(IsReviewCompareTabActive));
             OnPropertyChanged(nameof(IsRevisedUploadTabActive));
@@ -432,6 +516,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     public string HeaderTitle => IsInCaptureMode && SelectedSession is not null
         ? $"Review Session: {SelectedSession.SessionName}"
         : "Review Sessions";
+    public string BackButtonText => IsInCaptureMode ? "← Sessions" : "← Dashboard";
 
     public string LeftPaneTitle => IsInCaptureMode ? "Session Captures" : $"Review Sessions ({Sessions.Count})";
 
@@ -445,11 +530,14 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     public bool IsSelectedCaptureVideo => SelectedCapture?.IsVideo == true;
     public string SelectedCapturePreviewPath => _selectedCapturePreviewPath;
     public bool CanManageCaptureUploads => IsInCaptureMode && SelectedCapture is not null && !IsSelectedCaptureVideo;
+    public bool HasSelectedRevisedUploads => UploadedCapturePreviewVariants.Count > 0;
+    public string RevisedUploadCountText => UploadedCapturePreviewVariants.Count.ToString();
+    public bool IsRevisedUploadEmpty => CanManageCaptureUploads && IsRevisedUploadTabActive && !HasSelectedRevisedUploads;
     public string CaptureUploadHintText =>
         IsReviewCompareTabActive
             ? "Review mode: showing original capture."
             : UploadedCapturePreviewVariants.Count == 0
-                ? "Drag images here or click Upload to add revised screenshots."
+                ? "No revised image yet. Drag one here or click Upload."
                 : SelectedCapturePreviewVariant is null || SelectedCapturePreviewVariant.IsOriginal
                     ? "Select an uploaded revision to compare."
                     : $"Viewing: {SelectedCapturePreviewVariant.Label}";
@@ -606,46 +694,98 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
     private async Task RefreshSessionsAsync()
     {
-        if (IsBusy)
+        if (IsBusy || _sessionRefreshInProgress)
         {
             return;
         }
 
-        IsBusy = true;
+        _sessionRefreshInProgress = true;
         var requestId = Interlocked.Increment(ref _sessionRefreshRequestId);
         StatusText = "Loading sessions...";
+        var ownsBusyState = false;
         try
         {
+            if (!_sessionCacheAttempted)
+            {
+                _sessionCacheAttempted = true;
+                var cached = await Task.Run(() => _sessionBrowseService.LoadCachedSessions(_storageRoot));
+                if (cached.Count > 0 && requestId == _sessionRefreshRequestId)
+                {
+                    ApplyLoadedSessions(cached);
+                    StatusText = $"Loaded {Sessions.Count} cached session(s). Checking for changes...";
+                }
+            }
+
+            if (_allSessions.Count == 0)
+            {
+                IsBusy = true;
+                ownsBusyState = true;
+            }
             var sessions = await Task.Run(() => _sessionBrowseService.GetSessions(_storageRoot));
             if (requestId != _sessionRefreshRequestId)
             {
                 return;
             }
 
-            _allSessions.Clear();
-            _allSessions.AddRange(sessions);
-            ApplySessionUnreadIndicators();
-
-            IsInCaptureMode = false;
-            RebuildSessionProjectFilterChoices();
-            RebuildSessionUserFilterChoices();
-            RebuildSessionContextChoices();
-            ApplySessionFilters();
-
-            SessionPreviewCaptures.Clear();
-            SelectedCapture = null;
+            if (sessions.Count == 0 && _allSessions.Count > 0 &&
+                !await Task.Run(() => Directory.Exists(_storageRoot)))
+            {
+                StatusText = "Session storage is unavailable. Showing cached sessions.";
+                return;
+            }
+            if (IsInCaptureMode || (IsBusy && !ownsBusyState)) return;
+            if (!SessionsEquivalent(_allSessions, sessions)) ApplyLoadedSessions(sessions);
             StatusText = Sessions.Count == 0
                 ? "No sessions found. Save a review session from the main window."
                 : $"Loaded {Sessions.Count} session(s).";
         }
         catch (Exception ex)
         {
-            StatusText = $"Session scan failed: {ex.Message}";
+            StatusText = _allSessions.Count > 0
+                ? $"Could not refresh session storage. Showing cached sessions: {ex.Message}"
+                : $"Session scan failed: {ex.Message}";
         }
         finally
         {
-            IsBusy = false;
+            if (ownsBusyState) IsBusy = false;
+            _sessionRefreshInProgress = false;
         }
+    }
+
+    private void ApplyLoadedSessions(IReadOnlyList<SessionFolderSummary> sessions)
+    {
+        _allSessions.Clear();
+        foreach (var session in sessions) session.ActiveUser = _activeUser;
+        _allSessions.AddRange(sessions);
+        ApplySessionUnreadIndicators();
+        IsInCaptureMode = false;
+        RebuildSessionProjectFilterChoices();
+        RebuildSessionUserFilterChoices();
+        ApplySessionFilters();
+        SessionPreviewCaptures.Clear();
+        SelectedCapture = null;
+    }
+
+    private static bool SessionsEquivalent(IReadOnlyList<SessionFolderSummary> left, IReadOnlyList<SessionFolderSummary> right)
+    {
+        if (left.Count != right.Count) return false;
+        for (var i = 0; i < left.Count; i++)
+        {
+            var a = left[i];
+            var b = right[i];
+            if (!string.Equals(a.FolderPath, b.FolderPath, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(a.SessionName, b.SessionName, StringComparison.Ordinal) ||
+                !string.Equals(a.Project, b.Project, StringComparison.Ordinal) ||
+                !string.Equals(a.PreviewImagePath, b.PreviewImagePath, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(a.FallbackPreviewImagePath, b.FallbackPreviewImagePath, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(a.ReviewState, b.ReviewState, StringComparison.Ordinal) ||
+                a.StartLocal != b.StartLocal || a.EndLocal != b.EndLocal ||
+                a.CaptureCount != b.CaptureCount || a.HasRevisedUploads != b.HasRevisedUploads ||
+                !(a.PendingRevisionReviewUsers ?? new List<string>()).SequenceEqual(b.PendingRevisionReviewUsers ?? new List<string>(), StringComparer.OrdinalIgnoreCase) ||
+                !(a.Users ?? new List<string>()).SequenceEqual(b.Users ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+                return false;
+        }
+        return true;
     }
 
     private void RebuildSessionProjectFilterChoices()
@@ -758,11 +898,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             .OrderByDescending(session => session.StartLocal)
             .ToArray();
 
-        Sessions.Clear();
-        foreach (var session in filtered)
-        {
-            Sessions.Add(session);
-        }
+        ((RangeObservableCollection<SessionFolderSummary>)Sessions).ReplaceAll(filtered);
 
         SelectedSession = Sessions.FirstOrDefault(session =>
             string.Equals(session.FolderPath, previousSessionPath, StringComparison.OrdinalIgnoreCase))
@@ -868,6 +1004,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         _selectedCaptureCompareTabIndex = normalized;
         OnPropertyChanged(nameof(IsReviewCompareTabActive));
         OnPropertyChanged(nameof(IsRevisedUploadTabActive));
+        OnPropertyChanged(nameof(IsRevisedUploadEmpty));
         OnPropertyChanged(nameof(CaptureUploadHintText));
         if (applySelection)
         {
@@ -1093,7 +1230,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             {
                 try
                 {
-                    SessionPreviewCaptures.Add(new CaptureListItemViewModel(record));
+                    SessionPreviewCaptures.Add(new CaptureListItemViewModel(record, _activeUser));
                 }
                 catch (Exception ex)
                 {
@@ -1166,7 +1303,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
                 {
                     try
                     {
-                        list.Add(new CaptureListItemViewModel(record));
+                        list.Add(new CaptureListItemViewModel(record, _activeUser));
                     }
                     catch (Exception ex)
                     {
@@ -1199,24 +1336,8 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            SessionCaptures.Clear();
-            const int addBatchSize = 64;
-            for (var i = 0; i < prepared.list.Count; i++)
-            {
-                SessionCaptures.Add(prepared.list[i]);
-                if ((i + 1) % addBatchSize == 0)
-                {
-                    StatusText = $"Opening '{targetSession.SessionName}'... {i + 1:n0}/{prepared.list.Count:n0}";
-                    await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
-                    if (!ReferenceEquals(SelectedSession, targetSession))
-                    {
-                        return;
-                    }
-                }
-            }
-
-            RebuildSessionCaptureUserChoices();
-            RebuildSessionContextChoices();
+            ((RangeObservableCollection<CaptureListItemViewModel>)SessionCaptures).ReplaceAll(prepared.list);
+            RefreshRevisionReviewIndicators();
 
             if (SessionCaptures.Count == 0)
             {
@@ -1252,16 +1373,18 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
     private async Task EnsureSelectedCapturePreviewReadyAsync()
     {
-        if (SelectedCapture is null)
+        var selected = SelectedCapture;
+        if (selected is null)
         {
             return;
         }
 
+        if (!selected.IsVideo) await selected.EnsurePreviewLoadedAsync();
+        if (!ReferenceEquals(SelectedCapture, selected)) return;
         await Dispatcher.InvokeAsync(() =>
         {
-            if (!SelectedCapture.IsVideo)
+            if (!selected.IsVideo)
             {
-                _ = SelectedCapture.PreviewImage;
                 FitPreviewToViewport();
             }
 
@@ -1285,6 +1408,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         }
 
         var result = System.Windows.MessageBox.Show(
+            Window.GetWindow(this),
             $"Are you sure you want to delete session '{session.SessionName}' and its files?",
             "Delete Session",
             MessageBoxButton.YesNo,
@@ -1575,20 +1699,40 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void BackButton_OnClick(object sender, RoutedEventArgs e)
+    private async void BackButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (!IsInCaptureMode)
+        if (_isNavigatingBack) return;
+        if (IsBusy || _isImportingCaptureImages || _isUpdatingRevisionReview)
         {
+            StatusText = "Finish the current session action before going back.";
             return;
         }
+        _isNavigatingBack = true;
+        try
+        {
+            if (!await FlushPendingSessionNoteAsync())
+            {
+                StatusText = "Could not save the current note. Stay here and try again.";
+                return;
+            }
+            if (!IsInCaptureMode)
+            {
+                HomeRequested?.Invoke();
+                return;
+            }
 
-        SessionCaptures.Clear();
-        SelectedCapture = null;
-        IsInCaptureMode = false;
-        ClearSessionVideoPreview();
-        ResetPreviewViewport();
-        _ = LoadSessionPreviewAsync(SelectedSession);
-        StatusText = "Returned to review sessions.";
+            SessionCaptures.Clear();
+            SelectedCapture = null;
+            IsInCaptureMode = false;
+            ClearSessionVideoPreview();
+            ResetPreviewViewport();
+            _ = LoadSessionPreviewAsync(SelectedSession);
+            StatusText = "Returned to review sessions.";
+        }
+        finally
+        {
+            _isNavigatingBack = false;
+        }
     }
 
     private void OpenButton_OnClick(object sender, RoutedEventArgs e)
@@ -1641,7 +1785,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         SetSessionPreviewFullscreen(!_isSessionPreviewFullscreen);
     }
 
-    private void SessionBrowserWindow_OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private void SessionBrowserView_OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != Key.Escape || !_isSessionPreviewFullscreen)
         {
@@ -1679,6 +1823,43 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         if (item?.DataContext is SessionFolderSummary session)
         {
             SelectedSession = session;
+        }
+    }
+
+    private void OpenSessionScreenshotsFolder_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (SelectedSession is null) return;
+        var screenshotsFolder = Path.Combine(SelectedSession.FolderPath, "screenshots");
+        OpenSessionFolderInExplorer(Directory.Exists(screenshotsFolder)
+            ? screenshotsFolder
+            : Path.Combine(SelectedSession.FolderPath, "captures"));
+    }
+
+    private void OpenSessionFolder_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (SelectedSession is not null) OpenSessionFolderInExplorer(SelectedSession.FolderPath);
+    }
+
+    private void OpenSessionFolderInExplorer(string folderPath)
+    {
+        try
+        {
+            if (!Directory.Exists(folderPath))
+            {
+                StatusText = "Session folder is unavailable.";
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{folderPath}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Open in Explorer failed: {ex.Message}";
         }
     }
 
@@ -2102,6 +2283,27 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
     {
         IsSessionNoteSavedVisible = false;
         _sessionNoteSavedFeedbackTimer.Stop();
+        if (SelectedCapture is null || !SessionCaptureNoteTextBox.IsKeyboardFocusWithin) return;
+        _pendingSessionNoteCapture = SelectedCapture;
+        _sessionNoteSaveTimer.Stop();
+        _sessionNoteSaveTimer.Start();
+    }
+
+    public Task<bool> FlushPendingSessionNoteAsync()
+    {
+        _sessionNoteSaveTimer.Stop();
+        var pending = _pendingSessionNoteCapture;
+        _pendingSessionNoteCapture = null;
+        if (pending is null) return _sessionNoteSaveInFlight ?? Task.FromResult(true);
+        var previousSave = _sessionNoteSaveInFlight;
+        _sessionNoteSaveInFlight = SaveAfterPreviousAsync(previousSave, pending);
+        return _sessionNoteSaveInFlight;
+
+        async Task<bool> SaveAfterPreviousAsync(Task<bool>? previous, CaptureListItemViewModel capture)
+        {
+            if (previous is not null) await previous;
+            return await PersistSelectedCaptureMetadataAsync(capture);
+        }
     }
 
     private async void SaveCaptureNoteButton_OnClick(object sender, RoutedEventArgs e)
@@ -2112,7 +2314,12 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var success = await PersistSelectedCaptureMetadataAsync(SelectedCapture);
+        var capture = SelectedCapture;
+        var hasPendingNote = ReferenceEquals(_pendingSessionNoteCapture, capture);
+        var success = hasPendingNote
+            ? await FlushPendingSessionNoteAsync()
+            : await PersistSelectedCaptureMetadataAsync(capture);
+        if (!hasPendingNote) _sessionNoteSaveInFlight = Task.FromResult(success);
         if (!success)
         {
             return;
@@ -2173,7 +2380,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
             CheckFileExists = true,
             Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp;*.webp|All Files|*.*"
         };
-        if (dialog.ShowDialog(this) != true)
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
         {
             return;
         }
@@ -2229,6 +2436,7 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
 
     private async Task ImportCaptureUploadImagesAsync(IEnumerable<string> sourceImagePaths)
     {
+        if (_isImportingCaptureImages || _isUpdatingRevisionReview) return;
         if (SelectedCapture is null || SelectedCapture.IsVideo)
         {
             StatusText = "Select an image capture first.";
@@ -2247,6 +2455,13 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         }
 
         var capture = SelectedCapture;
+        var metadata = capture.Record.Metadata;
+        var previousPaths = metadata.UploadedImagePaths?.ToList() ?? new List<string>();
+        var previousReviewer = metadata.RevisionReviewRequestedForUser;
+        var previousRequestedUtc = metadata.RevisionReviewRequestedUtc;
+        var previousCompletedUtc = metadata.RevisionReviewCompletedUtc;
+        var copiedPaths = new List<string>();
+        _isImportingCaptureImages = true;
         try
         {
             var captureDirectory = (capture.CaptureDirectory ?? string.Empty).Trim();
@@ -2256,54 +2471,161 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            Directory.CreateDirectory(captureDirectory);
             var uploadDirectory = Path.Combine(captureDirectory, UploadsFolderName);
-            Directory.CreateDirectory(uploadDirectory);
-
-            var metadataUploadPaths = capture.Record.Metadata.UploadedImagePaths?.ToList() ?? new List<string>();
-            var importedCount = 0;
-            string? lastImportedResolvedPath = null;
-            foreach (var sourcePath in sourcePaths)
+            StatusText = $"Adding {sourcePaths.Length:n0} revised image(s)...";
+            await Task.Run(() =>
             {
-                var destinationPath = BuildUniqueUploadDestinationPath(uploadDirectory, Path.GetFileName(sourcePath));
-                File.Copy(sourcePath, destinationPath, overwrite: false);
-                var storedPath = ToStoredUploadPath(capture, destinationPath);
-                if (metadataUploadPaths.Contains(storedPath, StringComparer.OrdinalIgnoreCase))
+                Directory.CreateDirectory(uploadDirectory);
+                foreach (var sourcePath in sourcePaths)
                 {
-                    continue;
+                    var destinationPath = BuildUniqueUploadDestinationPath(uploadDirectory, Path.GetFileName(sourcePath));
+                    File.Copy(sourcePath, destinationPath, overwrite: false);
+                    copiedPaths.Add(destinationPath);
                 }
+            });
 
-                metadataUploadPaths.Add(storedPath);
-                importedCount++;
-                lastImportedResolvedPath = destinationPath;
-            }
-
-            if (importedCount <= 0)
-            {
-                StatusText = "No new images were added.";
-                return;
-            }
-
-            capture.Record.Metadata.UploadedImagePaths = metadataUploadPaths;
+            metadata.UploadedImagePaths = previousPaths
+                .Concat(copiedPaths.Select(path => ToStoredUploadPath(capture, path)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var requestedFor = SelectedReviewRecipient == NoReviewerLabel
+                ? string.Empty
+                : CaptureService.NormalizeUser(SelectedReviewRecipient);
+            metadata.RevisionReviewRequestedForUser = requestedFor;
+            metadata.RevisionReviewRequestedUtc = string.IsNullOrWhiteSpace(requestedFor)
+                ? default
+                : DateTime.UtcNow;
+            metadata.RevisionReviewCompletedUtc = default;
             if (!await PersistSelectedCaptureMetadataAsync(capture))
             {
+                RestorePreviousReviewState();
                 return;
             }
 
-            RebuildCapturePreviewVariants(lastImportedResolvedPath);
-            StatusText = importedCount == 1
-                ? "Added 1 uploaded image."
-                : $"Added {importedCount:n0} uploaded images.";
+            if (ReferenceEquals(SelectedCapture, capture))
+                RebuildCapturePreviewVariants(copiedPaths.LastOrDefault());
+            RefreshRevisionReviewIndicators();
+            StatusText = copiedPaths.Count == 1
+                ? "Added 1 revised image."
+                : $"Added {copiedPaths.Count:n0} revised images.";
+            if (!string.IsNullOrWhiteSpace(requestedFor)) StatusText += $" Review requested from {requestedFor}.";
             ShowSessionNoteSavedFeedback();
         }
         catch (Exception ex)
         {
+            RestorePreviousReviewState();
             StatusText = $"Image upload failed: {ex.Message}";
             AppLogService.Error("Session.CaptureUpload.Failed", "Failed importing session capture uploads.", ex, new
             {
                 capture.Record.Metadata.JsonPath
             });
         }
+        finally
+        {
+            _isImportingCaptureImages = false;
+        }
+
+        void RestorePreviousReviewState()
+        {
+            metadata.UploadedImagePaths = previousPaths;
+            metadata.RevisionReviewRequestedForUser = previousReviewer;
+            metadata.RevisionReviewRequestedUtc = previousRequestedUtc;
+            metadata.RevisionReviewCompletedUtc = previousCompletedUtc;
+            foreach (var path in copiedPaths)
+            {
+                try { File.Delete(path); } catch { /* Leave a readable orphan file if cleanup fails. */ }
+            }
+        }
+    }
+
+    private async void RequestRevisionReviewButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingRevisionReview || _isImportingCaptureImages) return;
+        var capture = SelectedCapture;
+        if (capture is null || capture.IsVideo ||
+            capture.Record.Metadata.UploadedImagePaths is not { Count: > 0 } uploadPaths ||
+            !uploadPaths.Any(path => TryResolveCaptureVariantPath(capture, path, out _)))
+        {
+            StatusText = "Upload a revised image before requesting review.";
+            return;
+        }
+
+        var reviewer = SelectedReviewRecipient == NoReviewerLabel
+            ? string.Empty
+            : CaptureService.NormalizeUser(SelectedReviewRecipient);
+        if (string.IsNullOrWhiteSpace(reviewer))
+        {
+            StatusText = "Choose a reviewer first. Add users in Settings if needed.";
+            return;
+        }
+
+        _isUpdatingRevisionReview = true;
+        try
+        {
+            var metadata = capture.Record.Metadata;
+            var previousUser = metadata.RevisionReviewRequestedForUser;
+            var previousRequestedUtc = metadata.RevisionReviewRequestedUtc;
+            var previousCompletedUtc = metadata.RevisionReviewCompletedUtc;
+            metadata.RevisionReviewRequestedForUser = reviewer;
+            metadata.RevisionReviewRequestedUtc = DateTime.UtcNow;
+            metadata.RevisionReviewCompletedUtc = default;
+            if (!await PersistSelectedCaptureMetadataAsync(capture))
+            {
+                metadata.RevisionReviewRequestedForUser = previousUser;
+                metadata.RevisionReviewRequestedUtc = previousRequestedUtc;
+                metadata.RevisionReviewCompletedUtc = previousCompletedUtc;
+                return;
+            }
+
+            RefreshRevisionReviewIndicators();
+            StatusText = $"Review requested from {reviewer}.";
+        }
+        finally
+        {
+            _isUpdatingRevisionReview = false;
+        }
+    }
+
+    private async void MarkRevisionReviewedButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingRevisionReview || _isImportingCaptureImages) return;
+        var capture = SelectedCapture;
+        if (capture is null || !capture.IsRevisionReviewRequestedForLocalUser) return;
+
+        _isUpdatingRevisionReview = true;
+        try
+        {
+            var metadata = capture.Record.Metadata;
+            var previousCompletedUtc = metadata.RevisionReviewCompletedUtc;
+            metadata.RevisionReviewCompletedUtc = DateTime.UtcNow;
+            if (!await PersistSelectedCaptureMetadataAsync(capture))
+            {
+                metadata.RevisionReviewCompletedUtc = previousCompletedUtc;
+                return;
+            }
+
+            RefreshRevisionReviewIndicators();
+            StatusText = "Revised image marked reviewed.";
+        }
+        finally
+        {
+            _isUpdatingRevisionReview = false;
+        }
+    }
+
+    private void RefreshRevisionReviewIndicators()
+    {
+        foreach (var capture in SessionCaptures) capture.RefreshRevisionReviewState();
+        if (SelectedSession is not null)
+        {
+            SelectedSession.HasRevisedUploads = SessionCaptures.Any(capture => capture.HasRevisedUploads);
+            SelectedSession.PendingRevisionReviewUsers = SessionCaptures
+                .Where(capture => RevisionReviewState.IsPending(capture.Record.Metadata))
+                .Select(capture => capture.Record.Metadata.RevisionReviewRequestedForUser.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        OnPropertyChanged(nameof(CanMarkRevisionReviewed));
     }
 
     private static string BuildUniqueUploadDestinationPath(string uploadDirectory, string sourceFileName)
@@ -3273,12 +3595,13 @@ public partial class SessionBrowserWindow : Window, INotifyPropertyChanged
         RebuildSessionContextChoices();
     }
 
-    private void OnWindowClosed(object? sender, EventArgs e)
+    public void DisposeView()
     {
         _sessionPreviewLoadCts?.Cancel();
         _sessionPreviewLoadCts?.Dispose();
         _sessionPreviewLoadCts = null;
         _sessionNoteSavedFeedbackTimer.Stop();
+        _sessionNoteSaveTimer.Stop();
         _sessionVideoToolbarFadeTimer.Stop();
         _sessionVideoPositionTimer.Stop();
         ClearSessionVideoPreview();

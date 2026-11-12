@@ -24,7 +24,7 @@
         <SolidColorBrush x:Key="ControlPressedBrush" Color="#141414" />
         <SolidColorBrush x:Key="BorderBrush" Color="#3A3A3A" />
         <SolidColorBrush x:Key="MutedBrush" Color="#B5B5B5" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#7B7B7B" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#C5A65A" />
 
         <Style x:Key="PrimaryButtonStyle" TargetType="Button">
             <Setter Property="Padding" Value="14,9" />
@@ -53,6 +53,37 @@
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlPressedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="AccentActionButtonStyle" TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+            <Setter Property="Background" Value="#2B261A" />
+            <Setter Property="Foreground" Value="#F5E2AE" />
+            <Setter Property="BorderBrush" Value="#9D8249" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="6,0" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#39311F" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#D3B66F" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#211C13" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Chrome" Property="Opacity" Value="0.5" />
@@ -92,8 +123,8 @@
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlPressedBrush}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#3A3A3A" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#A5A5A5" />
+                                <Setter TargetName="Chrome" Property="Background" Value="#302A1D" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#B99D5C" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -457,6 +488,7 @@
         </Style>
     </Window.Resources>
 
+    <Grid>
     <Grid x:Name="MainWindowRootGrid" Margin="14">
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="MainPreviewColumn" Width="*" />
@@ -1228,21 +1260,21 @@
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                    <Button Style="{StaticResource PrimaryButtonStyle}"
+                    <Button Style="{StaticResource AccentActionButtonStyle}"
                             MinWidth="124"
                             MinHeight="34"
                             Padding="12,7"
                             Margin="0,0,10,0"
                             Command="{Binding OpenSessionsCommand}"
-                            ToolTip="Open session browser">
+                            ToolTip="Browse review sessions in Revie">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE8B7;" />
-                            <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Open Sessions" />
+                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Foreground="#E6C97E" Text="&#xE8B7;" />
+                            <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Sessions" />
                             <Border HorizontalAlignment="Right"
                                     VerticalAlignment="Top"
                                     Margin="0,-8,-8,0"
@@ -1250,15 +1282,15 @@
                                     Height="18"
                                     Padding="4,0"
                                     CornerRadius="9"
-                                    Background="#B12323"
-                                    BorderBrush="#D96A6A"
+                                    Background="#55421F"
+                                    BorderBrush="#D1B469"
                                     BorderThickness="1"
                                     Visibility="{Binding HasUnviewedSessions, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <TextBlock HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
                                            FontSize="10"
                                            FontWeight="Bold"
-                                           Foreground="#FFF3F3"
+                                           Foreground="#FFF0BF"
                                            Text="{Binding UnviewedSessionsBadgeText}" />
                             </Border>
                         </Grid>
@@ -1277,7 +1309,7 @@
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE768;" />
+                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Foreground="#D8BB71" Text="&#xE768;" />
                             <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Start Session" />
                         </Grid>
                     </Button>
@@ -1300,7 +1332,7 @@
                         </Grid>
                     </Button>
 
-                    <Button Style="{StaticResource PrimaryButtonStyle}"
+                    <Button Style="{StaticResource AccentActionButtonStyle}"
                             MinWidth="118"
                             MinHeight="34"
                             Padding="12,7"
@@ -1312,7 +1344,7 @@
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Text="&#xE74E;" />
+                            <TextBlock Style="{StaticResource ToolbarGlyphStyle}" Foreground="#E6C97E" Text="&#xE74E;" />
                             <TextBlock Grid.Column="2" Style="{StaticResource ToolbarLabelStyle}" Text="Save Session" />
                         </Grid>
                     </Button>
@@ -1370,5 +1402,7 @@
                 </StackPanel>
             </Border>
         </Border>
+    </Grid>
+    <ContentControl x:Name="SessionHost" Visibility="Collapsed" />
     </Grid>
 </Window>

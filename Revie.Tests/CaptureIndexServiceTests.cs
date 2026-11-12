@@ -8,6 +8,59 @@ namespace Revie.Tests;
 public sealed class CaptureIndexServiceTests
 {
     [Fact]
+    public async Task Manifest_LoadsImmediately_AndReconcilesChangedAndDeletedCaptures()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var firstPath = CreateCaptureJson(root, Path.Combine("2026", "02", "19", "101010_000"), "Alpha");
+            var service = new CaptureIndexService();
+            await service.ScanAsync(root);
+
+            Assert.Equal("Alpha", Assert.Single(await service.LoadCachedAsync(root)).Metadata.Project);
+
+            var metadata = JsonSerializer.Deserialize<CaptureMetadata>(File.ReadAllText(firstPath))!;
+            metadata.Project = "Updated";
+            File.WriteAllText(firstPath, JsonSerializer.Serialize(metadata));
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+            var secondPath = CreateCaptureJson(root, Path.Combine("2026", "02", "19", "101011_000"), "New");
+
+            var changed = await service.ScanAsync(root);
+            Assert.Equal(2, changed.Count);
+            Assert.Contains(changed, record => record.Metadata.Project == "Updated");
+            Assert.Contains(changed, record => record.Metadata.JsonPath == secondPath);
+
+            File.Delete(firstPath);
+            var remaining = await service.ScanAsync(root);
+            Assert.Equal(secondPath, Assert.Single(remaining).Metadata.JsonPath);
+            Assert.Equal(secondPath, Assert.Single(await service.LoadCachedAsync(root)).Metadata.JsonPath);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task ScanAsync_StreamsMoreThanChannelCapacity()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            for (var i = 0; i < 160; i++)
+                CreateCaptureJson(root, Path.Combine("2026", "02", "19", $"{i:000000}_000"), "Alpha");
+
+            var service = new CaptureIndexService();
+            var records = await service.ScanAsync(root).WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(160, records.Count);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task ScanAsync_ExcludesSessionAndDeleteQueueCaptures()
     {
         var root = CreateTempRoot();
@@ -16,6 +69,7 @@ public sealed class CaptureIndexServiceTests
             var activeCapturePath = CreateCaptureJson(root, Path.Combine("2026", "02", "19", "101010_000"), "Alpha");
             _ = CreateCaptureJson(root, Path.Combine("Sessions", "20260219_MySession", "captures", "001_20260219_101011_000"), "Beta");
             _ = CreateCaptureJson(root, Path.Combine(".revie-delete-queue", "pending", "20260219_101012_000"), "Gamma");
+            _ = CreateCaptureJson(root, Path.Combine("Projects", "Alpha", ".revie-delete-queue", "pending"), "Queued");
 
             var service = new CaptureIndexService();
             var records = await service.ScanAsync(root);

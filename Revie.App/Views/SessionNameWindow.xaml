@@ -1,12 +1,12 @@
 <Window x:Class="Revie.App.Views.SessionNameWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Save Session"
+        Title="Name Review Folder"
         Icon="/Assets/revie.ico"
         Width="460"
-        Height="260"
+        Height="290"
         MinWidth="420"
-        MinHeight="240"
+        MinHeight="290"
         WindowStartupLocation="CenterOwner"
         Background="#121212"
         Foreground="#ECECEC"
@@ -59,26 +59,34 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock FontSize="20" FontWeight="SemiBold" Text="Save Session" />
+        <TextBlock FontSize="20" FontWeight="SemiBold" Text="Name Review Folder" />
         <TextBlock Grid.Row="1"
                    Margin="0,6,0,12"
                    Foreground="#B5B5B5"
-                   Text="Give this review session a name so it can be shared and referenced later." />
+                   Text="Your screenshots will be together in this folder's screenshots subfolder." />
 
-        <TextBlock Grid.Row="2" Foreground="#B5B5B5" Text="Session Name" />
+        <TextBlock Grid.Row="2" Foreground="#DCC587" Text="Folder Name" />
         <TextBox x:Name="SessionNameTextBox"
                  Grid.Row="3"
                  Margin="0,10,0,0"
                  VerticalAlignment="Top"
                  KeyDown="SessionNameTextBox_OnKeyDown" />
 
-        <StackPanel Grid.Row="4" Margin="0,16,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+        <TextBlock x:Name="DestinationTextBlock"
+                   Grid.Row="4"
+                   Margin="0,8,0,0"
+                   Foreground="#B5B5B5"
+                   TextTrimming="CharacterEllipsis" />
+
+        <StackPanel Grid.Row="5" Margin="0,16,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Margin="0,0,8,0" Content="Cancel" Click="CancelButton_OnClick" />
-            <Button Content="Save" Click="SaveButton_OnClick" />
+            <Button Content="Save" Click="SaveButton_OnClick"
+                    Background="#2B261A" Foreground="#F5E2AE" BorderBrush="#9D8249" />
         </StackPanel>
     </Grid>
 </Window>

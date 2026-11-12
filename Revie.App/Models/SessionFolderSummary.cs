@@ -1,11 +1,21 @@
 using System.ComponentModel;
+using System.Globalization;
+using System.Text.Json.Serialization;
+using System.Windows.Media;
+using Revie.App.Infrastructure;
 
 namespace Revie.App.Models;
 
 public sealed class SessionFolderSummary : INotifyPropertyChanged
 {
+    private static readonly SemaphoreSlim PreviewSlots = new(4, 4);
     private int _unviewedCaptureCount;
+    private List<string> _pendingRevisionReviewUsers = new();
+    private string _activeUser = string.Empty;
+    private bool _hasRevisedUploads;
     private string _reviewState = Revie.App.Models.ReviewState.None;
+    private volatile ImageSource? _previewImage;
+    private int _previewLoadStarted;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -17,8 +27,84 @@ public sealed class SessionFolderSummary : INotifyPropertyChanged
     public string FolderPath { get; init; } = string.Empty;
     public int CaptureCount { get; init; }
     public string PreviewImagePath { get; init; } = string.Empty;
-    public bool HasRevisedUploads { get; init; }
-    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewImagePath);
+    public string FallbackPreviewImagePath { get; init; } = string.Empty;
+    public bool HasRevisedUploads
+    {
+        get => _hasRevisedUploads;
+        set
+        {
+            if (_hasRevisedUploads == value) return;
+            _hasRevisedUploads = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRevisedUploads)));
+        }
+    }
+    public List<string> PendingRevisionReviewUsers
+    {
+        get => _pendingRevisionReviewUsers;
+        set
+        {
+            _pendingRevisionReviewUsers = value ?? new List<string>();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPendingRevisionReviewForActiveUser)));
+        }
+    }
+    [JsonIgnore]
+    public string ActiveUser
+    {
+        get => _activeUser;
+        set
+        {
+            _activeUser = value ?? string.Empty;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPendingRevisionReviewForActiveUser)));
+        }
+    }
+    [JsonIgnore]
+    public bool HasPendingRevisionReviewForActiveUser =>
+        !string.IsNullOrWhiteSpace(_activeUser) &&
+        _pendingRevisionReviewUsers.Contains(_activeUser, StringComparer.OrdinalIgnoreCase);
+    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewImagePath) || !string.IsNullOrWhiteSpace(FallbackPreviewImagePath);
+    [JsonIgnore]
+    public ImageSource? PreviewImage
+    {
+        get
+        {
+            if (HasPreview && Interlocked.Exchange(ref _previewLoadStarted, 1) == 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    await PreviewSlots.WaitAsync();
+                    try
+                    {
+                        var converter = new SafeImagePathConverter();
+                        var source = converter.Convert(
+                            PreviewImagePath, typeof(ImageSource), 320, CultureInfo.InvariantCulture) as ImageSource;
+                        if (!SafeImagePathConverter.IsUsableImage(source) &&
+                            !string.IsNullOrWhiteSpace(FallbackPreviewImagePath) &&
+                            !string.Equals(PreviewImagePath, FallbackPreviewImagePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            source = converter.Convert(
+                                FallbackPreviewImagePath, typeof(ImageSource), 320, CultureInfo.InvariantCulture) as ImageSource;
+                        }
+                        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+                        _ = dispatcher.BeginInvoke(() =>
+                        {
+                            _previewImage = source;
+                            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PreviewImage)));
+                        });
+                    }
+                    catch
+                    {
+                        // A missing preview must not block the session list.
+                    }
+                    finally
+                    {
+                        PreviewSlots.Release();
+                    }
+                });
+            }
+            return _previewImage;
+        }
+    }
     public string ReviewState
     {
         get => _reviewState;

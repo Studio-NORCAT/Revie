@@ -10,6 +10,7 @@ namespace Revie.App;
 public partial class App : System.Windows.Application
 {
     private const string SingleInstanceMutexName = @"Local\Revie.SingleInstance";
+    private const string ActivationEventName = @"Local\Revie.Activate";
     private readonly SettingsService _settingsService = new();
     private readonly StorageService _storageService = new();
     private readonly CaptureIndexService _captureIndexService = new();
@@ -23,15 +24,21 @@ public partial class App : System.Windows.Application
     private HotkeyService? _hotkeyService;
     private OverlayWindow? _overlayWindow;
     private MainWindow? _mainWindow;
-    private SessionBrowserWindow? _sessionBrowserWindow;
+    private SessionBrowserView? _sessionBrowserView;
     private CaptureToastWindow? _captureToastWindow;
     private MainViewModel? _mainViewModel;
     private Forms.NotifyIcon? _trayIcon;
     private SingleInstanceGate? _singleInstanceGate;
+    private EventWaitHandle? _activationEvent;
+    private CancellationTokenSource? _activationCancellation;
     private bool _isCapturing;
     private DateTime? _videoStartLocal;
     private bool _isSessionActive;
     private bool _isSessionSaveInProgress;
+    private bool _isSessionNameDialogOpen;
+    private bool _isExitInProgress;
+    private Task? _videoStartTask;
+    private Task<bool>? _videoStopTask;
     private DateTime _sessionStartLocal;
     private DateTime _sessionStartUtc;
     private string _activeSessionCaptureBaseRoot = string.Empty;
@@ -46,22 +53,33 @@ public partial class App : System.Windows.Application
         TaskScheduler.UnobservedTaskException += OnTaskSchedulerUnobservedTaskException;
 
         _singleInstanceGate = new SingleInstanceGate(SingleInstanceMutexName);
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName);
         if (!_singleInstanceGate.IsPrimaryInstance)
         {
+            _activationEvent.Set();
             Shutdown();
             return;
         }
+        StartActivationListener();
 
         _settings = await _settingsService.LoadAsync();
         NormalizeSettings();
         DataBackupService.Enabled = _settings.EnableDeleteBackups;
-        AppLogService.Info("App.Startup", "Revie startup completed settings load.", new
+
+        InitializeTray();
+        InitializeMainWindow();
+        InitializeOverlay();
+        InitializeHotkeys();
+        OpenMainWindow();
+
+        // Let the first window paint before touching storage or writing the startup log.
+        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        AppLogService.Info("App.Startup", "Revie opened the main window.", new
         {
             StorageRoot = _settings.StorageRoot,
             ActiveProject = _settings.ActiveProject,
             BackupEnabled = _settings.EnableDeleteBackups
         });
-
         if (!await EnsureStorageIsConfiguredAsync())
         {
             Shutdown();
@@ -72,15 +90,16 @@ public partial class App : System.Windows.Application
         if (syncedAtStartup)
         {
             await _settingsService.SaveAsync(_settings);
+            _mainViewModel?.ApplyTaxonomySettings(_settings.Projects, _settings.ActiveProject, _settings.Users, _settings.ActiveUser);
         }
 
-        CleanupStaleSessionStagingDirectories();
-        CleanupLegacySessionActiveRootIfEmpty();
-
-        InitializeOverlay();
-        InitializeMainWindow();
-        InitializeHotkeys();
-        InitializeTray();
+        _ = RefreshSessionNotificationsAsync();
+        _ = Task.Run(() =>
+        {
+            CleanupStaleSessionStagingDirectories();
+            SessionArchiveService.CleanupStaleTemporarySessions(_settings.StorageRoot);
+            CleanupLegacySessionActiveRootIfEmpty();
+        });
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -89,6 +108,9 @@ public partial class App : System.Windows.Application
         AppDomain.CurrentDomain.UnhandledException -= OnCurrentDomainUnhandledException;
         TaskScheduler.UnobservedTaskException -= OnTaskSchedulerUnobservedTaskException;
         _hotkeyService?.Dispose();
+        _activationCancellation?.Cancel();
+        _activationEvent?.Dispose();
+        _activationCancellation?.Dispose();
         _singleInstanceGate?.Dispose();
         _singleInstanceGate = null;
 
@@ -105,12 +127,6 @@ public partial class App : System.Windows.Application
             _mainWindow.Close();
         }
 
-        if (_sessionBrowserWindow is not null)
-        {
-            _sessionBrowserWindow.Close();
-            _sessionBrowserWindow = null;
-        }
-
         if (_captureToastWindow is not null)
         {
             _captureToastWindow.Close();
@@ -124,9 +140,31 @@ public partial class App : System.Windows.Application
         base.OnExit(e);
     }
 
+    private void StartActivationListener()
+    {
+        _activationCancellation = new CancellationTokenSource();
+        var cancellation = _activationCancellation;
+        var activationEvent = _activationEvent!;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var handles = new WaitHandle[] { activationEvent, cancellation.Token.WaitHandle };
+                while (WaitHandle.WaitAny(handles) == 0)
+                {
+                    Dispatcher.BeginInvoke(() => OpenMainWindow());
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // The application is shutting down.
+            }
+        });
+    }
+
     private async Task<bool> EnsureStorageIsConfiguredAsync()
     {
-        if (_storageService.ValidateWriteAccess(_settings.StorageRoot, out _))
+        if (await Task.Run(() => _storageService.ValidateWriteAccess(_settings.StorageRoot, out _)))
         {
             return true;
         }
@@ -220,7 +258,7 @@ public partial class App : System.Windows.Application
         _mainViewModel.StartSessionRequested += (_, _) => StartSession();
         _mainViewModel.SaveSessionRequested += async (_, _) => await SaveSessionAsync();
         _mainViewModel.CancelSessionRequested += async (_, _) => await CancelSessionAsync();
-        _mainViewModel.OpenSessionsRequested += (_, _) => OpenSessionsWindow();
+        _mainViewModel.OpenSessionsRequested += async (_, _) => await OpenSessionsWindowAsync();
         _mainViewModel.StartVideoRequested += async (_, _) => await StartVideoCaptureAsync();
         _mainViewModel.StopVideoRequested += async (_, _) => await StopVideoCaptureAsync();
         _mainViewModel.ActiveCaptureProjectChanged += OnActiveCaptureProjectChanged;
@@ -228,7 +266,6 @@ public partial class App : System.Windows.Application
         _mainViewModel.ApplyTaxonomySettings(_settings.Projects, _settings.ActiveProject, _settings.Users, _settings.ActiveUser);
         _mainViewModel.SetSessionState(false, null, 0);
         _mainViewModel.SetVideoState(false, null);
-        RefreshSessionNotifications();
 
         _mainWindow = new MainWindow
         {
@@ -255,9 +292,9 @@ public partial class App : System.Windows.Application
         menu.Items.Add("Start Review Session", null, (_, _) => StartSession());
         menu.Items.Add("Save Review Session", null, async (_, _) => await SaveSessionAsync());
         menu.Items.Add("Cancel Review Session", null, async (_, _) => await CancelSessionAsync());
-        menu.Items.Add("Open Sessions", null, (_, _) => OpenSessionsWindow());
+        menu.Items.Add("Open Sessions", null, async (_, _) => await OpenSessionsWindowAsync());
         menu.Items.Add("Settings", null, async (_, _) => await ShowSettingsAsync(isFirstRun: false));
-        menu.Items.Add("Exit", null, (_, _) => Shutdown());
+        menu.Items.Add("Exit", null, async (_, _) => await ExitApplicationAsync());
 
         var trayIcon = string.IsNullOrWhiteSpace(Environment.ProcessPath)
             ? null
@@ -272,7 +309,6 @@ public partial class App : System.Windows.Application
         };
 
         _trayIcon.DoubleClick += (_, _) => OpenMainWindow();
-        ShowTrayNotification("Revie is running", "Use Ctrl+Shift+D to toggle drawing mode.");
     }
 
     private async void HotkeyServiceOnHotkeyPressed(object? sender, string action)
@@ -340,7 +376,7 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        if (_isSessionSaveInProgress)
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save in progress. Capture is temporarily locked.");
             return;
@@ -422,32 +458,148 @@ public partial class App : System.Windows.Application
         }
 
         _mainWindow.ShowAndActivate();
-        _ = _mainViewModel.RefreshAsync();
+        if (!_mainWindow.IsShowingSessions) _ = _mainViewModel.RefreshAsync();
     }
 
-    private void OpenSessionsWindow()
+    private async Task ExitApplicationAsync()
     {
-        if (_sessionBrowserWindow is not null)
+        if (_isExitInProgress) return;
+        _isExitInProgress = true;
+        var confirmedUnsavedSessionRoot = string.Empty;
+        try
         {
-            if (_sessionBrowserWindow.IsVisible)
+            if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
             {
-                _sessionBrowserWindow.Activate();
+                _mainViewModel?.SetStatus("Wait for the session save to finish before exiting.");
+                ShowTrayNotification("Revie is still saving", "Wait for the session save to finish before exiting.");
                 return;
             }
 
-            _sessionBrowserWindow = null;
-        }
+            if (_videoStartTask is { IsCompleted: false })
+            {
+                _mainViewModel?.SetStatus("Waiting for video capture to start before exiting...");
+                await _videoStartTask;
+            }
 
-        _sessionBrowserWindow = new SessionBrowserWindow(_settings.StorageRoot, _settings.Projects, _settings.Users);
-        _sessionBrowserWindow.UnviewedSessionsCountChanged += count => _mainViewModel?.SetUnviewedSessionsCount(count);
-        _sessionBrowserWindow.Closed += (_, _) => _sessionBrowserWindow = null;
-        _sessionBrowserWindow.Show();
-        _sessionBrowserWindow.Activate();
+            if (_videoCaptureService.IsRecording || _videoStopTask is { IsCompleted: false })
+            {
+                _mainViewModel?.SetStatus("Finishing video recording before exiting...");
+                if (!await StopVideoCaptureAsync())
+                {
+                    _mainViewModel?.SetStatus("Video could not be finalized. Revie remains open so the session can be reviewed.");
+                    return;
+                }
+            }
+
+            if (_isSessionActive)
+            {
+                _mainWindow?.ShowAndActivate();
+                var count = _sessionCaptures.Count;
+                var prompt = $"The current review session has not been saved ({count:n0} capture(s)).\n\n" +
+                             "Save it before exiting?\n\nYes: name and save the review folder.\n" +
+                             "No: exit without saving.\nCancel: keep Revie open.";
+                var choice = _mainWindow is not null
+                    ? System.Windows.MessageBox.Show(_mainWindow, prompt, "Unsaved Review Session",
+                        MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel)
+                    : System.Windows.MessageBox.Show(prompt, "Unsaved Review Session",
+                        MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+                if (choice == MessageBoxResult.Cancel) return;
+                if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
+                {
+                    _mainViewModel?.SetStatus("Wait for the session save to finish before exiting.");
+                    return;
+                }
+
+                if (choice == MessageBoxResult.Yes && _isSessionActive)
+                {
+                    if (_mainWindow is not null && !await _mainWindow.FlushPendingNoteSaveAsync())
+                    {
+                        _mainViewModel?.SetStatus("Could not save the current note. Revie remains open.");
+                        return;
+                    }
+
+                    await SaveSessionAsync();
+                    if (_isSessionActive) return;
+                }
+                else if (choice == MessageBoxResult.No)
+                {
+                    confirmedUnsavedSessionRoot = _activeSessionCaptureBaseRoot;
+                }
+            }
+
+            if (_mainWindow is not null && !await _mainWindow.FlushPendingNoteSaveAsync())
+            {
+                _mainViewModel?.SetStatus("Could not save the current note. Revie remains open.");
+                return;
+            }
+            if (_sessionBrowserView is not null && !await _sessionBrowserView.FlushPendingSessionNoteAsync())
+            {
+                _mainViewModel?.SetStatus("Could not save the session note. Revie remains open.");
+                return;
+            }
+
+            if (_isSessionSaveInProgress || _isSessionNameDialogOpen ||
+                (_isSessionActive && !string.Equals(_activeSessionCaptureBaseRoot, confirmedUnsavedSessionRoot, StringComparison.OrdinalIgnoreCase)))
+            {
+                _mainViewModel?.SetStatus("The review session changed while exiting. Review it before closing Revie.");
+                return;
+            }
+
+            Shutdown();
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Error("App.Exit.Failed", "Revie could not finish the exit request.", ex);
+            _mainViewModel?.SetStatus($"Could not exit safely: {ex.Message}");
+            ShowTrayNotification("Exit canceled", "Revie remains open because the exit request failed.", Forms.ToolTipIcon.Warning);
+        }
+        finally
+        {
+            _isExitInProgress = false;
+        }
+    }
+
+    private async Task OpenSessionsWindowAsync()
+    {
+        if (_mainWindow is null) return;
+        try
+        {
+            if (_mainWindow.IsShowingSessions)
+            {
+                _mainWindow.ShowAndActivate();
+                return;
+            }
+            if (!await _mainWindow.FlushPendingNoteSaveAsync())
+            {
+                _mainViewModel?.SetStatus("Could not save the current note. Sessions did not open.");
+                return;
+            }
+            if (_sessionBrowserView is null)
+            {
+                _sessionBrowserView = new SessionBrowserView(_settings.StorageRoot, _settings.Projects, _settings.Users, _settings.ActiveUser);
+                _sessionBrowserView.UnviewedSessionsCountChanged += count => _mainViewModel?.SetUnviewedSessionsCount(count);
+                _sessionBrowserView.HomeRequested += ReturnToDashboard;
+            }
+            _mainWindow.ShowSessions(_sessionBrowserView);
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Error("Sessions.Navigation.Failed", "Could not open the sessions view.", ex);
+            _mainViewModel?.SetStatus($"Could not open Sessions: {ex.Message}");
+            _mainWindow.ShowDashboard();
+            _sessionBrowserView = null;
+        }
+    }
+
+    private void ReturnToDashboard()
+    {
+        _mainWindow?.ShowDashboard();
+        _sessionBrowserView = null;
     }
 
     private void StartSession()
     {
-        if (_isSessionSaveInProgress)
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save in progress. Start session is temporarily locked.");
             return;
@@ -486,7 +638,7 @@ public partial class App : System.Windows.Application
 
     private async Task SaveSessionAsync()
     {
-        if (_isSessionSaveInProgress)
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save already in progress.");
             return;
@@ -504,6 +656,12 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        if (_isCapturing || _videoCaptureService.IsRecording)
+        {
+            _mainViewModel?.SetStatus("Finish the current capture or video recording before saving the session.");
+            return;
+        }
+
         if (!_storageService.ValidateWriteAccess(_settings.StorageRoot, out var storageError))
         {
             ShowTrayNotification("Save session failed", $"Storage root unavailable: {storageError}", Forms.ToolTipIcon.Error);
@@ -512,14 +670,34 @@ public partial class App : System.Windows.Application
         }
 
         var suggestedName = BuildDefaultSessionName(_sessionStartLocal);
-        var nameDialog = new SessionNameWindow(suggestedName)
+        var nameDialog = new SessionNameWindow(suggestedName, Path.Combine(_settings.StorageRoot, "Sessions"))
         {
-            Owner = _mainWindow
+            WindowStartupLocation = _mainWindow?.IsVisible == true
+                ? WindowStartupLocation.CenterOwner
+                : WindowStartupLocation.CenterScreen
         };
+        if (_mainWindow?.IsVisible == true) nameDialog.Owner = _mainWindow;
 
-        if (nameDialog.ShowDialog() != true)
+        bool? nameDialogResult;
+        _isSessionNameDialogOpen = true;
+        try
+        {
+            nameDialogResult = nameDialog.ShowDialog();
+        }
+        finally
+        {
+            _isSessionNameDialogOpen = false;
+        }
+
+        if (nameDialogResult != true)
         {
             _mainViewModel?.SetStatus("Save session canceled.");
+            return;
+        }
+
+        if (_isCapturing || _videoCaptureService.IsRecording)
+        {
+            _mainViewModel?.SetStatus("Finish the current capture or video recording before saving the session.");
             return;
         }
 
@@ -588,7 +766,7 @@ public partial class App : System.Windows.Application
 
     private async Task CancelSessionAsync()
     {
-        if (_isSessionSaveInProgress)
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save in progress. Cancel session is temporarily locked.");
             return;
@@ -709,6 +887,7 @@ public partial class App : System.Windows.Application
 
         _overlayWindow?.ApplyPenSizeSettings(_settings.PenSizes);
         _mainViewModel?.ApplyTaxonomySettings(_settings.Projects, _settings.ActiveProject, _settings.Users, _settings.ActiveUser);
+        _sessionBrowserView?.UpdateReviewUsers(_settings.Users, _settings.ActiveUser);
         if (taxonomyChanged)
         {
             AppLogService.Info("Taxonomy.Sync.Applied", "Shared taxonomy changes were applied after settings save.", new
@@ -725,9 +904,22 @@ public partial class App : System.Windows.Application
         return true;
     }
 
-    private async Task StartVideoCaptureAsync()
+    private Task StartVideoCaptureAsync()
     {
-        if (_isSessionSaveInProgress)
+        if (_videoStartTask is { IsCompleted: false }) return _videoStartTask;
+        _videoStartTask = StartVideoCaptureCoreAsync();
+        return _videoStartTask;
+    }
+
+    private async Task StartVideoCaptureCoreAsync()
+    {
+        if (_isExitInProgress || _videoStopTask is { IsCompleted: false })
+        {
+            _mainViewModel?.SetStatus("Wait for the current video or exit action to finish before recording again.");
+            return;
+        }
+
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save in progress. Video capture is temporarily locked.");
             return;
@@ -779,21 +971,41 @@ public partial class App : System.Windows.Application
         ShowCaptureToast("Video recording started");
     }
 
-    private async Task StopVideoCaptureAsync()
+    private Task<bool> StopVideoCaptureAsync()
     {
-        if (_isSessionSaveInProgress)
+        if (_videoStopTask is { IsCompleted: false }) return _videoStopTask;
+        _videoStopTask = StopVideoCaptureCoreAsync();
+        return _videoStopTask;
+    }
+
+    private async Task<bool> StopVideoCaptureCoreAsync()
+    {
+        if (_isSessionSaveInProgress || _isSessionNameDialogOpen)
         {
             _mainViewModel?.SetStatus("Session save in progress. Video actions are temporarily locked.");
-            return;
+            return false;
         }
 
         if (!_videoCaptureService.IsRecording)
         {
             _mainViewModel?.SetStatus("No active video segment.");
-            return;
+            return false;
         }
 
-        var record = await _videoCaptureService.StopAsync();
+        CaptureRecord? record;
+        try
+        {
+            record = await _videoCaptureService.StopAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Error("Capture.Video.StopFailed", "Video recording could not be finalized.", ex);
+            _mainViewModel?.SetStatus($"Video capture could not be finalized: {ex.Message}");
+            ShowTrayNotification("Video failed", "The recording could not be finalized.", Forms.ToolTipIcon.Error);
+            _mainViewModel?.SetVideoState(false, null);
+            _videoStartLocal = null;
+            return false;
+        }
         _mainViewModel?.SetVideoState(false, null);
         _videoStartLocal = null;
 
@@ -803,7 +1015,7 @@ public partial class App : System.Windows.Application
             _mainViewModel?.SetStatus("Video capture failed: output file was not created.");
             ShowTrayNotification("Video failed", "No output video was created.", Forms.ToolTipIcon.Error);
             ShowCaptureToast("Video capture failed");
-            return;
+            return false;
         }
 
         if (_isSessionActive)
@@ -831,6 +1043,7 @@ public partial class App : System.Windows.Application
         });
         ShowTrayNotification("Video saved", $"{record.Metadata.DurationSeconds:0.0}s segment ({audioState})");
         ShowCaptureToast($"Video saved ({record.Metadata.DurationSeconds:0.0}s, {audioState})");
+        return true;
     }
 
     private async void OnActiveCaptureProjectChanged(string projectName)
@@ -906,6 +1119,7 @@ public partial class App : System.Windows.Application
             _mainViewModel?.SetStatus(string.IsNullOrWhiteSpace(normalizedUser)
                 ? "Active capture user set to none."
                 : $"Active capture user set to '{normalizedUser}'.");
+            _sessionBrowserView?.UpdateReviewUsers(_settings.Users, _settings.ActiveUser);
             AppLogService.Info("User.Active.Changed", "Active capture user changed.", new
             {
                 ActiveUser = normalizedUser
@@ -1099,6 +1313,27 @@ public partial class App : System.Windows.Application
         }
     }
 
+    private async Task RefreshSessionNotificationsAsync()
+    {
+        if (_mainViewModel is null || string.IsNullOrWhiteSpace(_settings.StorageRoot)) return;
+        var root = _settings.StorageRoot;
+        try
+        {
+            var count = await Task.Run(() =>
+            {
+                var sessions = _sessionBrowseService.GetSessions(root);
+                var state = _sessionNotificationService.Load();
+                return _sessionNotificationService.CountSessionsWithUnviewedCaptures(state, sessions);
+            });
+            if (string.Equals(root, _settings.StorageRoot, StringComparison.OrdinalIgnoreCase))
+                _mainViewModel?.SetUnviewedSessionsCount(count);
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Warn("Sessions.Notifications.Failed", "Session notifications could not be refreshed.", new { ex.Message });
+        }
+    }
+
     private static string BuildDefaultSessionName(DateTime startLocal)
     {
         return $"Review_{startLocal:yyyyMMdd_HHmm}";
@@ -1228,13 +1463,18 @@ public partial class App : System.Windows.Application
             return false;
         }
 
-        if (!_storageService.ValidateWriteAccess(_settings.StorageRoot, out var storageError))
+        var validation = await Task.Run(() =>
+        {
+            var writable = _storageService.ValidateWriteAccess(_settings.StorageRoot, out var error);
+            return (writable, error);
+        });
+        if (!validation.writable)
         {
             AppLogService.Warn("Taxonomy.Sync.Skipped", "Skipped shared taxonomy sync because storage root was not writable.", new
             {
                 Source = source,
                 _settings.StorageRoot,
-                StorageError = storageError
+                StorageError = validation.error
             });
             return false;
         }

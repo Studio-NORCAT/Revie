@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Revie.App.Models;
 
@@ -10,6 +11,7 @@ public sealed class SessionBrowseService
     private const string DeletePendingMarkerFileName = ".revie-delete-pending";
     private static readonly string[] PreferredPreviewFileNames =
     {
+        SidebarThumbnailService.FileName,
         "thumbnail.png",
         "thumbnail.jpg",
         "thumbnail.jpeg",
@@ -32,6 +34,54 @@ public sealed class SessionBrowseService
         PropertyNameCaseInsensitive = true
     };
 
+    private sealed class SessionSummaryManifest
+    {
+        public int Version { get; set; } = 1;
+        public string StorageRoot { get; set; } = string.Empty;
+        public List<SessionFolderSummary> Sessions { get; set; } = new();
+    }
+
+    public IReadOnlyList<SessionFolderSummary> LoadCachedSessions(string storageRoot)
+    {
+        try
+        {
+            var path = GetSummaryCachePath(storageRoot);
+            if (!File.Exists(path)) return Array.Empty<SessionFolderSummary>();
+            var manifest = JsonSerializer.Deserialize<SessionSummaryManifest>(File.ReadAllText(path), JsonOptions);
+            return manifest?.Version == 1 &&
+                   string.Equals(manifest.StorageRoot, Path.GetFullPath(storageRoot), StringComparison.OrdinalIgnoreCase)
+                ? manifest.Sessions ?? new List<SessionFolderSummary>()
+                : Array.Empty<SessionFolderSummary>();
+        }
+        catch
+        {
+            return Array.Empty<SessionFolderSummary>();
+        }
+    }
+
+    private static void SaveCachedSessions(string storageRoot, IReadOnlyList<SessionFolderSummary> sessions)
+    {
+        try
+        {
+            SafeFileWriteService.WriteJsonAtomic(GetSummaryCachePath(storageRoot), new SessionSummaryManifest
+            {
+                StorageRoot = Path.GetFullPath(storageRoot),
+                Sessions = sessions.ToList()
+            }, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            AppLogService.Warn("Session.SummaryCache.SaveFailed", "Session summary cache could not be saved.", new { ex.Message });
+        }
+    }
+
+    private static string GetSummaryCachePath(string storageRoot)
+    {
+        var normalized = Path.GetFullPath(storageRoot.Trim()).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Revie", "indexes", $"sessions-{hash}.json");
+    }
+
     public IReadOnlyList<SessionFolderSummary> GetSessions(string storageRoot)
     {
         if (string.IsNullOrWhiteSpace(storageRoot))
@@ -49,6 +99,7 @@ public sealed class SessionBrowseService
         try
         {
             sessionFolders = Directory.EnumerateDirectories(sessionsRoot)
+                .Where(folder => !Path.GetFileName(folder).StartsWith(".revie-saving-", StringComparison.OrdinalIgnoreCase))
                 .Where(folder => !IsPendingDeletePath(folder))
                 .Where(folder => !IsDeletePendingFolder(folder))
                 .ToArray();
@@ -59,10 +110,12 @@ public sealed class SessionBrowseService
             {
                 sessionsRoot
             });
-            return Array.Empty<SessionFolderSummary>();
+            throw new IOException("Session folders could not be read.", ex);
         }
 
         var sessions = new List<SessionFolderSummary>();
+        var hadFolderErrors = false;
+        Dictionary<string, SessionFolderSummary>? cachedByFolder = null;
         foreach (var folder in sessionFolders)
         {
             try
@@ -77,6 +130,11 @@ public sealed class SessionBrowseService
                 var defaultCount = sessionRecords.Length;
                 var sessionReviewState = DetermineSessionReviewState(sessionRecords);
                 var hasRevisedUploads = sessionRecords.Any(record => HasUploadedRevisions(record.Metadata));
+                var pendingRevisionReviewUsers = sessionRecords
+                    .Where(record => RevisionReviewState.IsPending(record.Metadata) && HasUploadedRevisions(record.Metadata))
+                    .Select(record => record.Metadata.RevisionReviewRequestedForUser.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
                 var sessionUsers = new List<string>();
                 var previewImagePath = string.Empty;
 
@@ -87,8 +145,14 @@ public sealed class SessionBrowseService
                         continue;
                     }
 
-                    sessionUsers = CollectSessionUsers(folder);
-                    previewImagePath = FindSessionPreviewImagePath(folder);
+                    sessionUsers = sessionRecords
+                        .SelectMany(record => record.Metadata.AssignedUsers)
+                        .Where(user => !string.IsNullOrWhiteSpace(user))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(user => user, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    previewImagePath = FindSessionPreviewImagePath(sessionRecords);
+                    var fallbackImagePath = FindSessionFallbackImagePath(sessionRecords);
                     sessions.Add(new SessionFolderSummary
                     {
                         SessionName = defaultName,
@@ -99,8 +163,10 @@ public sealed class SessionBrowseService
                         FolderPath = folder,
                         CaptureCount = defaultCount,
                         PreviewImagePath = previewImagePath,
+                        FallbackPreviewImagePath = fallbackImagePath,
                         ReviewState = sessionReviewState,
-                        HasRevisedUploads = hasRevisedUploads
+                        HasRevisedUploads = hasRevisedUploads,
+                        PendingRevisionReviewUsers = pendingRevisionReviewUsers
                     });
                     continue;
                 }
@@ -160,16 +226,11 @@ public sealed class SessionBrowseService
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .OrderBy(user => user, StringComparer.OrdinalIgnoreCase)
                         .ToList();
-                    if (sessionUsers.Count == 0)
-                    {
-                        sessionUsers = CollectSessionUsers(folder);
-                    }
                 }
 
-                if (string.IsNullOrWhiteSpace(previewImagePath))
-                {
-                    previewImagePath = FindSessionPreviewImagePath(folder);
-                }
+                var recordPreviewPath = FindSessionPreviewImagePath(sessionRecords);
+                if (!string.IsNullOrWhiteSpace(recordPreviewPath)) previewImagePath = recordPreviewPath;
+                var recordFallbackPath = FindSessionFallbackImagePath(sessionRecords);
 
                 // Ignore orphaned/partially deleted session folders that no longer contain captures.
                 if (defaultCount <= 0 && string.IsNullOrWhiteSpace(previewImagePath))
@@ -187,12 +248,15 @@ public sealed class SessionBrowseService
                     FolderPath = folder,
                     CaptureCount = captureCount,
                     PreviewImagePath = previewImagePath,
+                    FallbackPreviewImagePath = recordFallbackPath,
                     ReviewState = sessionReviewState,
-                    HasRevisedUploads = hasRevisedUploads
+                    HasRevisedUploads = hasRevisedUploads,
+                    PendingRevisionReviewUsers = pendingRevisionReviewUsers
                 });
             }
             catch (Exception ex)
             {
+                hadFolderErrors = true;
                 AppLogService.Error("Session.Scan.FolderFailed", "Failed reading session folder.", ex, new
                 {
                     folder
@@ -203,12 +267,21 @@ public sealed class SessionBrowseService
                 {
                     sessions.Add(fallback);
                 }
+                else
+                {
+                    cachedByFolder ??= LoadCachedSessions(storageRoot)
+                        .GroupBy(session => session.FolderPath, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+                    if (cachedByFolder.TryGetValue(folder, out var cached)) sessions.Add(cached);
+                }
             }
         }
 
-        return sessions
+        var orderedSessions = sessions
             .OrderByDescending(session => session.StartLocal)
             .ToArray();
+        if (!hadFolderErrors) SaveCachedSessions(storageRoot, orderedSessions);
+        return orderedSessions;
     }
 
     public IReadOnlyList<CaptureRecord> GetSessionCaptures(string sessionFolderPath)
@@ -351,12 +424,19 @@ public sealed class SessionBrowseService
             {
                 metadata.CaptureDirectory = ResolveStoredPath(metadata.CaptureDirectory, sessionFolderPath);
             }
+            var localAttachmentsDirectory = Path.Combine(sessionFolderPath, "captures", "attachments", Path.GetFileName(metadata.CaptureDirectory));
+            if (Directory.Exists(localAttachmentsDirectory) &&
+                string.Equals(metadataDirectory, Path.Combine(sessionFolderPath, "captures"), StringComparison.OrdinalIgnoreCase))
+                metadata.CaptureDirectory = localAttachmentsDirectory;
 
             metadata.JsonPath = jsonPath;
             metadata.CaptureType = NormalizeCaptureType(metadata.CaptureType, metadataDirectory, metadata);
             metadata.ImagePath = ResolvePath(metadata.ImagePath, metadataDirectory, metadata.CaptureDirectory, "capture.png");
             metadata.VideoPath = ResolvePath(metadata.VideoPath, metadataDirectory, metadata.CaptureDirectory, "capture.mp4");
             metadata.ThumbnailPath = ResolvePath(metadata.ThumbnailPath, metadataDirectory, metadata.CaptureDirectory, "thumbnail.png");
+            metadata.ImagePath = RecoverSessionMediaPath(metadata.ImagePath, sessionFolderPath, "screenshots");
+            metadata.VideoPath = RecoverSessionMediaPath(metadata.VideoPath, sessionFolderPath, "videos");
+            metadata.ThumbnailPath = RecoverSessionMediaPath(metadata.ThumbnailPath, sessionFolderPath, "thumbnails");
             if (string.Equals(metadata.CaptureType, "video", StringComparison.OrdinalIgnoreCase))
             {
                 if (!File.Exists(metadata.VideoPath))
@@ -573,27 +653,50 @@ public sealed class SessionBrowseService
         {
             var service = new SessionBrowseService();
             var metadataPaths = service.GetSessionCaptureMetadataPaths(sessionFolder);
+            var records = new List<CaptureRecord>();
             foreach (var jsonPath in metadataPaths.OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 var record = service.TryLoadRecordFromJsonPath(jsonPath, sessionFolder, applyLinkedAnnotationOverrides: false);
-                if (record is null || !HasValidMediaFile(record))
-                {
-                    continue;
-                }
-
-                var previewPath = record.IsVideo ? record.ThumbnailPath : record.ImagePath;
-                if (!string.IsNullOrWhiteSpace(previewPath) && File.Exists(previewPath))
-                {
-                    return previewPath;
-                }
+                if (record is not null && HasValidMediaFile(record)) records.Add(record);
             }
-
-            return string.Empty;
+            return FindSessionPreviewImagePath(records);
         }
         catch
         {
             return string.Empty;
         }
+    }
+
+    private static string FindSessionPreviewImagePath(IReadOnlyList<CaptureRecord> records)
+    {
+        foreach (var record in records.OrderByDescending(record => record.LocalTimestamp))
+        {
+            var metadataDirectory = Path.GetDirectoryName(record.Metadata.JsonPath);
+            if (!string.IsNullOrWhiteSpace(metadataDirectory))
+            {
+                var siblingPreview = Path.Combine(metadataDirectory, SidebarThumbnailService.FileName);
+                if (File.Exists(siblingPreview)) return siblingPreview;
+            }
+            if (!string.IsNullOrWhiteSpace(record.CaptureDirectory))
+            {
+                var siblingPreview = Path.Combine(record.CaptureDirectory, SidebarThumbnailService.FileName);
+                if (File.Exists(siblingPreview)) return siblingPreview;
+            }
+            var thumbnailPath = record.ThumbnailPath;
+            if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                return thumbnailPath;
+            if (!record.IsVideo && !string.IsNullOrWhiteSpace(record.ImagePath) && File.Exists(record.ImagePath))
+                return record.ImagePath;
+        }
+        return string.Empty;
+    }
+
+    private static string FindSessionFallbackImagePath(IReadOnlyList<CaptureRecord> records)
+    {
+        return records.OrderByDescending(record => record.LocalTimestamp)
+            .Where(record => !record.IsVideo && !string.IsNullOrWhiteSpace(record.ImagePath))
+            .Select(record => record.ImagePath)
+            .FirstOrDefault(File.Exists) ?? string.Empty;
     }
 
     private static string FindBestPreviewFileInDirectory(string directoryPath)
@@ -696,6 +799,18 @@ public sealed class SessionBrowseService
     private static string ResolvePath(string path, string folder, string fallbackName)
     {
         return ResolvePath(path, folder, folder, fallbackName);
+    }
+
+    private static string RecoverSessionMediaPath(string path, string sessionFolder, string mediaFolder)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return path;
+        var filename = Path.GetFileName(path);
+        if (string.IsNullOrWhiteSpace(filename)) return path;
+        var candidate = Path.Combine(sessionFolder, mediaFolder, filename);
+        if (File.Exists(candidate)) return candidate;
+        if (File.Exists(path)) return path;
+        candidate = Path.Combine(sessionFolder, "captures", filename);
+        return File.Exists(candidate) ? candidate : path;
     }
 
     private static string ResolvePath(string path, string metadataDirectory, string fallbackDirectory, string fallbackName)

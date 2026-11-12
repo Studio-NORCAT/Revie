@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -11,10 +12,53 @@ public sealed class CaptureIndexService
     private const string DeleteQueueDirectoryName = ".revie-delete-queue";
     private const string SessionsDirectoryName = "Sessions";
     private static readonly SemaphoreSlim ScanSemaphore = new(1, 1);
+    private static readonly EnumerationOptions DirectoryEnumerationOptions = new()
+    {
+        RecurseSubdirectories = false,
+        IgnoreInaccessible = false,
+        AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint
+    };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
+
+    private sealed class CaptureIndexManifest
+    {
+        public int Version { get; set; } = 1;
+        public string StorageRoot { get; set; } = string.Empty;
+        public List<CaptureIndexEntry> Entries { get; set; } = new();
+    }
+
+    private sealed class CaptureIndexEntry
+    {
+        public string JsonPath { get; set; } = string.Empty;
+        public long LastWriteTicks { get; set; }
+        public long Length { get; set; }
+        public long SourceLastWriteTicks { get; set; }
+        public CaptureMetadata Metadata { get; set; } = new();
+    }
+
+    public Task<IReadOnlyList<CaptureRecord>> LoadCachedAsync(string storageRoot, CancellationToken cancellationToken = default)
+    {
+        return Task.Run<IReadOnlyList<CaptureRecord>>(() =>
+        {
+            var manifest = ReadManifest(storageRoot);
+            return (manifest?.Entries ?? new List<CaptureIndexEntry>())
+                .Where(entry => entry is not null && entry.Metadata is not null && !string.IsNullOrWhiteSpace(entry.JsonPath) &&
+                                !IsPendingDeletePath(entry.JsonPath) && !IsSessionArchivePath(entry.JsonPath, storageRoot))
+                .GroupBy(entry => entry.JsonPath, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .Select(entry => new CaptureRecord
+                {
+                    Metadata = entry.Metadata,
+                    IndexMetadataWriteTicks = entry.LastWriteTicks,
+                    IndexSourceWriteTicks = entry.SourceLastWriteTicks
+                })
+                .OrderByDescending(record => record.LocalTimestamp)
+                .ToArray();
+        }, cancellationToken);
+    }
 
     public async Task<IReadOnlyList<CaptureRecord>> ScanAsync(string storageRoot, CancellationToken cancellationToken = default)
     {
@@ -33,50 +77,96 @@ public sealed class CaptureIndexService
         string storageRoot,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(storageRoot) || !Directory.Exists(storageRoot))
+        if (string.IsNullOrWhiteSpace(storageRoot))
         {
             yield break;
         }
 
-        var channel = Channel.CreateUnbounded<CaptureRecord>(new UnboundedChannelOptions
+        var channel = Channel.CreateBounded<CaptureRecord>(new BoundedChannelOptions(128)
         {
             SingleReader = true,
-            SingleWriter = true
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait
         });
 
         _ = Task.Run(async () =>
         {
-            await ScanSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var acquired = false;
             try
             {
-                List<string> jsonPaths;
-                try
-                {
-                    jsonPaths = Directory.EnumerateFiles(storageRoot, "capture.json", SearchOption.AllDirectories)
-                        .Where(path => !IsPendingDeletePath(path))
-                        .Where(path => !IsSessionArchivePath(path, storageRoot))
-                        .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-                }
-                catch
+                await ScanSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                acquired = true;
+                if (!Directory.Exists(storageRoot))
                 {
                     channel.Writer.TryComplete();
                     return;
                 }
+                List<string> jsonPaths;
+                try
+                {
+                    jsonPaths = EnumerateCaptureMetadataPaths(storageRoot, cancellationToken)
+                        .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+                catch (Exception ex)
+                {
+                    channel.Writer.TryComplete(ex);
+                    return;
+                }
 
+                var cachedEntries = (ReadManifest(storageRoot)?.Entries ?? new List<CaptureIndexEntry>())
+                    .Where(entry => entry is not null && entry.Metadata is not null && !string.IsNullOrWhiteSpace(entry.JsonPath))
+                    .GroupBy(entry => entry.JsonPath, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+                var newEntries = new List<CaptureIndexEntry>(jsonPaths.Count);
                 var linkedSourceCache = new Dictionary<string, LinkedAnnotationOverrides>(StringComparer.OrdinalIgnoreCase);
                 foreach (var jsonPath in jsonPaths)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var record = TryBuildRecord(jsonPath, storageRoot, linkedSourceCache, cancellationToken);
+                    long ticks;
+                    long length;
+                    try
+                    {
+                        var file = new FileInfo(jsonPath);
+                        ticks = file.LastWriteTimeUtc.Ticks;
+                        length = file.Length;
+                    }
+                    catch { continue; }
+                    cachedEntries.TryGetValue(jsonPath, out var cached);
+                    var sourceTicks = cached is null ? 0 : GetLinkedSourceTicks(cached.Metadata.SourceJsonPath);
+                    var record = cached is not null && cached.LastWriteTicks == ticks && cached.Length == length && cached.SourceLastWriteTicks == sourceTicks
+                        ? new CaptureRecord { Metadata = cached.Metadata }
+                        : TryBuildRecord(jsonPath, storageRoot, linkedSourceCache, cancellationToken);
                     if (record is null)
                     {
                         continue;
                     }
 
+                    record.IndexMetadataWriteTicks = ticks;
+                    record.IndexSourceWriteTicks = GetLinkedSourceTicks(record.Metadata.SourceJsonPath);
+                    newEntries.Add(new CaptureIndexEntry
+                    {
+                        JsonPath = jsonPath,
+                        LastWriteTicks = ticks,
+                        Length = length,
+                        SourceLastWriteTicks = record.IndexSourceWriteTicks,
+                        Metadata = record.Metadata
+                    });
                     await channel.Writer.WriteAsync(record, cancellationToken).ConfigureAwait(false);
                 }
 
+                try
+                {
+                    await SafeFileWriteService.WriteJsonAtomicAsync(GetManifestPath(storageRoot), new CaptureIndexManifest
+                    {
+                        StorageRoot = Path.GetFullPath(storageRoot),
+                        Entries = newEntries
+                    }, JsonOptions, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    AppLogService.Warn("Capture.Index.SaveFailed", "Capture index cache could not be saved.", new { ex.Message });
+                }
                 channel.Writer.TryComplete();
             }
             catch (OperationCanceledException ex)
@@ -89,14 +179,80 @@ public sealed class CaptureIndexService
             }
             finally
             {
-                ScanSemaphore.Release();
+                if (acquired) ScanSemaphore.Release();
             }
-        }, cancellationToken);
+        });
 
         await foreach (var record in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             yield return record;
         }
+    }
+
+    private static IEnumerable<string> EnumerateCaptureMetadataPaths(string storageRoot, CancellationToken cancellationToken)
+    {
+        var pending = new Stack<(string Path, bool IsRoot)>();
+        pending.Push((storageRoot, true));
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (directory, isRoot) = pending.Pop();
+            IEnumerable<string> files;
+            IEnumerable<string> children;
+            try
+            {
+                files = Directory.EnumerateFiles(directory, "capture.json", SearchOption.TopDirectoryOnly).ToArray();
+                children = Directory.EnumerateDirectories(directory, "*", DirectoryEnumerationOptions).ToArray();
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // A capture may have been moved or deleted during the scan.
+                continue;
+            }
+
+            foreach (var file in files) yield return file;
+            foreach (var child in children)
+            {
+                var name = Path.GetFileName(child);
+                if (string.Equals(name, DeleteQueueDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                    (isRoot && string.Equals(name, SessionsDirectoryName, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                pending.Push((child, false));
+            }
+        }
+    }
+
+    private static long GetLinkedSourceTicks(string? path)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : 0;
+        }
+        catch { return 0; }
+    }
+
+    private static CaptureIndexManifest? ReadManifest(string storageRoot)
+    {
+        try
+        {
+            var path = GetManifestPath(storageRoot);
+            if (!File.Exists(path)) return null;
+            var manifest = JsonSerializer.Deserialize<CaptureIndexManifest>(File.ReadAllText(path), JsonOptions);
+            return manifest?.Version == 1 &&
+                   string.Equals(manifest.StorageRoot, Path.GetFullPath(storageRoot), StringComparison.OrdinalIgnoreCase)
+                ? manifest : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string GetManifestPath(string storageRoot)
+    {
+        var normalized = Path.GetFullPath(storageRoot.Trim()).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Revie", "indexes", $"{hash}.json");
     }
 
     private static CaptureRecord? TryBuildRecord(
@@ -162,7 +318,8 @@ public sealed class CaptureIndexService
                     metadata.ImagePath = File.Exists(fallbackImagePath) ? fallbackImagePath : metadata.ImagePath;
                 }
 
-                metadata.ThumbnailPath = metadata.ImagePath;
+                var sidebarPreviewPath = Path.Combine(captureDirectory, SidebarThumbnailService.FileName);
+                metadata.ThumbnailPath = File.Exists(sidebarPreviewPath) ? sidebarPreviewPath : metadata.ImagePath;
             }
 
             if (metadata.LocalTimestamp == default)

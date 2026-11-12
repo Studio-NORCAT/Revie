@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject
 
     private readonly CaptureIndexService _captureIndexService;
     private readonly Func<string> _storageRootProvider;
+    private readonly SemaphoreSlim _metadataSaveGate = new(1, 1);
     private readonly HashSet<string> _configuredProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _configuredUsers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownProjects = new(StringComparer.OrdinalIgnoreCase);
@@ -64,13 +65,15 @@ public sealed class MainViewModel : ObservableObject
     private int _unviewedSessionsCount;
     private bool _suppressActiveProjectNotifications;
     private bool _suppressActiveUserNotifications;
+    private string _loadedCacheRoot = string.Empty;
+    private bool _refreshInProgress;
 
     public MainViewModel(CaptureIndexService captureIndexService, Func<string> storageRootProvider)
     {
         _captureIndexService = captureIndexService;
         _storageRootProvider = storageRootProvider;
 
-        Captures = new ObservableCollection<CaptureListItemViewModel>();
+        Captures = new RangeObservableCollection<CaptureListItemViewModel>();
         Captures.CollectionChanged += (_, _) => RaiseCommandCanExecuteChanged();
         CaptureView = CollectionViewSource.GetDefaultView(Captures);
         CaptureView.Filter = FilterCapture;
@@ -336,8 +339,10 @@ public sealed class MainViewModel : ObservableObject
         get => _selectedCapture;
         set
         {
+            var previous = _selectedCapture;
             if (SetProperty(ref _selectedCapture, value))
             {
+                previous?.ReleasePreviewImage();
                 SelectedProjectChoice = ToProjectChoice(value?.Project);
                 SelectedUserChoice = ToUserChoice(value?.AssignedUser);
                 OnPropertyChanged(nameof(IsSelectedCaptureVideo));
@@ -453,7 +458,7 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (IsBusy)
+        if (_refreshInProgress || IsBusy)
         {
             return;
         }
@@ -465,15 +470,37 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        IsBusy = true;
-        StatusText = "Scanning captures...";
-
+        _refreshInProgress = true;
         try
         {
-            Captures.Clear();
-            _knownProjects.Clear();
-            _knownUsers.Clear();
-            SeedKnownTaxonomyFromConfigured();
+            if (!string.Equals(_loadedCacheRoot, storageRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                _loadedCacheRoot = storageRoot;
+                Captures.Clear();
+                SelectedCapture = null;
+                var cached = await _captureIndexService.LoadCachedAsync(storageRoot, cancellationToken);
+                if (cached.Count > 0)
+                {
+                    ReplaceCaptures(cached);
+                    StatusText = $"Loaded {cached.Count:n0} cached capture(s). Checking for changes...";
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background, cancellationToken);
+                }
+            }
+
+            IsBusy = Captures.Count == 0;
+            if (Captures.Count == 0) StatusText = "Scanning captures...";
+            var preserveVisibleItems = Captures.Count > 0;
+            var pathsAtScanStart = preserveVisibleItems
+                ? Captures.Select(item => item.Record.Metadata.JsonPath).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : null;
+            var updatedRecords = preserveVisibleItems ? new List<CaptureRecord>() : null;
+            if (!preserveVisibleItems)
+            {
+                Captures.Clear();
+                _knownProjects.Clear();
+                _knownUsers.Clear();
+                SeedKnownTaxonomyFromConfigured();
+            }
 
             var skipped = 0;
             var loaded = 0;
@@ -504,6 +531,11 @@ public sealed class MainViewModel : ObservableObject
             {
                 try
                 {
+                    if (updatedRecords is not null)
+                    {
+                        updatedRecords.Add(record);
+                        continue;
+                    }
                     batch.Add(new CaptureListItemViewModel(record));
                     if (batch.Count >= 40)
                     {
@@ -521,11 +553,25 @@ public sealed class MainViewModel : ObservableObject
                 }
             }
 
-            FlushBatch();
-            RebuildProjectCollections();
-            CaptureView.Refresh();
-            UpdateVisibleCaptureState();
-            SelectedCapture = CaptureView.Cast<CaptureListItemViewModel>().FirstOrDefault();
+            if (updatedRecords is not null && updatedRecords.Count == 0 &&
+                !await Task.Run(() => Directory.Exists(storageRoot), cancellationToken))
+            {
+                StatusText = "Storage is unavailable. Showing cached captures.";
+                return;
+            }
+            if (updatedRecords is not null)
+            {
+                ReplaceCaptures(updatedRecords, pathsAtScanStart);
+                loaded = updatedRecords.Count;
+            }
+            else
+            {
+                FlushBatch();
+                RebuildProjectCollections();
+                CaptureView.Refresh();
+                UpdateVisibleCaptureState();
+                SelectedCapture = CaptureView.Cast<CaptureListItemViewModel>().FirstOrDefault();
+            }
             StatusText = skipped > 0
                 ? $"Loaded {Captures.Count} capture(s), skipped {skipped} invalid item(s)."
                 : $"Loaded {Captures.Count} capture(s).";
@@ -543,7 +589,47 @@ public sealed class MainViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+            _refreshInProgress = false;
         }
+    }
+
+    private void ReplaceCaptures(IEnumerable<CaptureRecord> records, HashSet<string>? pathsAtScanStart = null)
+    {
+        var selectedPath = SelectedCapture?.Record.Metadata.JsonPath;
+        var currentByPath = Captures
+            .Where(item => !string.IsNullOrWhiteSpace(item.Record.Metadata.JsonPath))
+            .GroupBy(item => item.Record.Metadata.JsonPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+        var recordsByPath = records
+            .Where(record => !string.IsNullOrWhiteSpace(record.Metadata.JsonPath))
+            .Where(record => pathsAtScanStart is null || !pathsAtScanStart.Contains(record.Metadata.JsonPath) ||
+                             currentByPath.ContainsKey(record.Metadata.JsonPath))
+            .ToDictionary(record => record.Metadata.JsonPath, StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, item) in currentByPath)
+        {
+            if (pathsAtScanStart is not null && !pathsAtScanStart.Contains(path) &&
+                !recordsByPath.ContainsKey(path) && File.Exists(path))
+                recordsByPath[path] = item.Record;
+        }
+        var items = recordsByPath.Values.OrderByDescending(record => record.LocalTimestamp)
+            .Select(record => currentByPath.TryGetValue(record.Metadata.JsonPath, out var existing) &&
+                              record.IndexMetadataWriteTicks != 0 &&
+                              existing.Record.IndexMetadataWriteTicks == record.IndexMetadataWriteTicks &&
+                              existing.Record.IndexSourceWriteTicks == record.IndexSourceWriteTicks
+                ? existing
+                : new CaptureListItemViewModel(record)).ToArray();
+        if (items.SequenceEqual(Captures)) return;
+        ((RangeObservableCollection<CaptureListItemViewModel>)Captures).ReplaceAll(items);
+        _knownProjects.Clear();
+        _knownUsers.Clear();
+        SeedKnownTaxonomyFromConfigured();
+        AddProjects(items.Select(item => item.Project));
+        AddUsers(items.SelectMany(item => item.AssignedUsers));
+        RebuildProjectCollections();
+        CaptureView.Refresh();
+        UpdateVisibleCaptureState();
+        SelectedCapture = items.FirstOrDefault(item => string.Equals(item.Record.Metadata.JsonPath, selectedPath, StringComparison.OrdinalIgnoreCase))
+            ?? CaptureView.Cast<CaptureListItemViewModel>().FirstOrDefault();
     }
 
     public void AddCapture(CaptureRecord record)
@@ -660,9 +746,17 @@ public sealed class MainViewModel : ObservableObject
             return false;
         }
 
+        return await PersistCaptureMetadataAsync(SelectedCapture);
+    }
+
+    public async Task<bool> PersistCaptureMetadataAsync(CaptureListItemViewModel capture)
+    {
+        if (capture is null) return false;
+        if (capture.IsDeleted) return true;
+
         try
         {
-            await PersistMetadataAsync(SelectedCapture);
+            await PersistMetadataAsync(capture);
             return true;
         }
         catch (Exception ex)
@@ -670,7 +764,7 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Note save failed: {ex.Message}";
             AppLogService.Error("Capture.Note.SaveFailed", "Failed to save capture metadata.", ex, new
             {
-                SelectedCapture?.Record.Metadata.JsonPath
+                capture.Record.Metadata.JsonPath
             });
             return false;
         }
@@ -875,7 +969,18 @@ public sealed class MainViewModel : ObservableObject
         SetBusyState(true, "Deleting capture...");
         try
         {
-            var (success, error) = await Task.Run(() => DeleteCaptureFiles(captureDirectory, mediaPath, jsonPath));
+            await _metadataSaveGate.WaitAsync();
+            (bool success, string error) result;
+            try
+            {
+                result = await Task.Run(() => DeleteCaptureFiles(captureDirectory, mediaPath, jsonPath));
+                if (result.success) toDelete.MarkDeleted();
+            }
+            finally
+            {
+                _metadataSaveGate.Release();
+            }
+            var (success, error) = result;
             if (!success)
             {
                 StatusText = $"Delete failed: {error}";
@@ -956,7 +1061,17 @@ public sealed class MainViewModel : ObservableObject
                 StatusText = $"Purging recent captures... {value.processed:n0}/{value.total:n0} (deleted {value.deleted:n0}, failed {value.failed:n0})";
             });
 
-            var result = await Task.Run(() => PurgeCaptureJobs(jobs, progress));
+            await _metadataSaveGate.WaitAsync();
+            (int deleted, int failed, List<CaptureListItemViewModel> deletedItems) result;
+            try
+            {
+                result = await Task.Run(() => PurgeCaptureJobs(jobs, progress));
+                foreach (var item in result.deletedItems) item.MarkDeleted();
+            }
+            finally
+            {
+                _metadataSaveGate.Release();
+            }
 
             foreach (var deletedItem in result.deletedItems)
             {
@@ -1045,17 +1160,18 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task AssignSelectedCaptureToProjectAsync()
     {
-        if (SelectedCapture is null)
+        var capture = SelectedCapture;
+        if (capture is null)
         {
             return;
         }
 
         var targetProject = ToProjectName(SelectedProjectChoice);
-        var currentProject = CaptureService.NormalizeProject(SelectedCapture.Project);
+        var currentProject = CaptureService.NormalizeProject(capture.Project);
 
         if (string.Equals(currentProject, targetProject, StringComparison.OrdinalIgnoreCase))
         {
-            await PersistMetadataAsync(SelectedCapture);
+            await PersistMetadataAsync(capture);
             StatusText = "Capture metadata saved.";
             return;
         }
@@ -1063,38 +1179,45 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             var storageRoot = _storageRootProvider();
-            var sourceDirectory = SelectedCapture.CaptureDirectory;
+            var sourceDirectory = capture.CaptureDirectory;
 
-            if (!string.IsNullOrWhiteSpace(sourceDirectory) && Directory.Exists(sourceDirectory))
+            if (!string.IsNullOrWhiteSpace(sourceDirectory) && await Task.Run(() => Directory.Exists(sourceDirectory)))
             {
-                var timestamp = SelectedCapture.LocalTimestamp;
-                var targetRoot = CaptureService.BuildProjectRoot(storageRoot, targetProject);
-                var targetDirectory = BuildUniqueTargetDirectory(Path.Combine(
-                    targetRoot,
-                    timestamp.ToString("yyyy"),
-                    timestamp.ToString("MM"),
-                    timestamp.ToString("dd"),
-                    timestamp.ToString("HHmmss_fff")));
-
-                var targetParent = Path.GetDirectoryName(targetDirectory);
-                if (!string.IsNullOrWhiteSpace(targetParent))
+                await _metadataSaveGate.WaitAsync();
+                try
                 {
-                    Directory.CreateDirectory(targetParent);
+                    var targetDirectory = await Task.Run(() =>
+                    {
+                        var timestamp = capture.LocalTimestamp;
+                        var targetRoot = CaptureService.BuildProjectRoot(storageRoot, targetProject);
+                        var destination = BuildUniqueTargetDirectory(Path.Combine(
+                            targetRoot,
+                            timestamp.ToString("yyyy"),
+                            timestamp.ToString("MM"),
+                            timestamp.ToString("dd"),
+                            timestamp.ToString("HHmmss_fff")));
+                        var parent = Path.GetDirectoryName(destination);
+                        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+                        Directory.Move(sourceDirectory, destination);
+                        return destination;
+                    });
+
+                    var newImagePath = Path.Combine(targetDirectory, "capture.png");
+                    var newJsonPath = Path.Combine(targetDirectory, "capture.json");
+                    capture.UpdatePaths(targetDirectory, newImagePath, newJsonPath);
                 }
-
-                Directory.Move(sourceDirectory, targetDirectory);
-
-                var newImagePath = Path.Combine(targetDirectory, "capture.png");
-                var newJsonPath = Path.Combine(targetDirectory, "capture.json");
-                SelectedCapture.UpdatePaths(targetDirectory, newImagePath, newJsonPath);
+                finally
+                {
+                    _metadataSaveGate.Release();
+                }
             }
 
-            SelectedCapture.Project = targetProject;
+            capture.Project = targetProject;
             AddProject(targetProject);
             RebuildProjectCollections();
-            await PersistMetadataAsync(SelectedCapture);
+            await PersistMetadataAsync(capture);
             RefreshFilter();
-            EnsureCaptureVisibleAndSelected(SelectedCapture);
+            EnsureCaptureVisibleAndSelected(capture);
             StatusText = string.IsNullOrWhiteSpace(targetProject)
                 ? "Capture moved to no project."
                 : $"Capture assigned to project '{targetProject}'.";
@@ -1104,12 +1227,12 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Assign project failed: {ex.Message}";
             AppLogService.Error("Capture.AssignProject.Failed", "Assign project failed.", ex, new
             {
-                SelectedCapture?.Record.Metadata.JsonPath,
+                capture.Record.Metadata.JsonPath,
                 TargetProject = targetProject
             });
-            if (SelectedCapture is not null)
+            if (ReferenceEquals(SelectedCapture, capture))
             {
-                SelectedProjectChoice = ToProjectChoice(SelectedCapture.Project);
+                SelectedProjectChoice = ToProjectChoice(capture.Project);
             }
         }
     }
@@ -1163,17 +1286,26 @@ public sealed class MainViewModel : ObservableObject
         var jsonPath = capture.Record.Metadata.JsonPath;
         if (string.IsNullOrWhiteSpace(jsonPath))
         {
-            return;
+            throw new InvalidOperationException("Capture metadata path is missing.");
         }
 
-        var directory = Path.GetDirectoryName(jsonPath);
-        if (!string.IsNullOrWhiteSpace(directory))
+        var json = JsonSerializer.Serialize(capture.Record.Metadata, MetadataJsonOptions);
+        await _metadataSaveGate.WaitAsync();
+        try
         {
-            Directory.CreateDirectory(directory);
+            if (capture.IsDeleted) return;
+            await Task.Run(async () =>
+            {
+                if (!File.Exists(jsonPath)) throw new FileNotFoundException("Capture metadata was removed.", jsonPath);
+                SafeFileWriteService.WriteAllTextAtomic(jsonPath, json);
+                var snapshot = JsonSerializer.Deserialize<CaptureMetadata>(json, MetadataJsonOptions);
+                if (snapshot is not null) await PersistLinkedSourceMetadataAsync(snapshot);
+            });
         }
-
-        await SafeFileWriteService.WriteJsonAtomicAsync(jsonPath, capture.Record.Metadata, MetadataJsonOptions);
-        await PersistLinkedSourceMetadataAsync(capture.Record.Metadata);
+        finally
+        {
+            _metadataSaveGate.Release();
+        }
         SyncInMemoryLinkedAnnotations(capture);
     }
 

@@ -3,6 +3,8 @@ namespace Revie.App.Models;
 public sealed class CaptureRecord
 {
     public required CaptureMetadata Metadata { get; init; }
+    public long IndexMetadataWriteTicks { get; set; }
+    public long IndexSourceWriteTicks { get; set; }
 
     public string ImagePath => Metadata.ImagePath ?? string.Empty;
     public string VideoPath => Metadata.VideoPath ?? string.Empty;

@@ -8,8 +8,20 @@ namespace Revie.App.Infrastructure;
 
 public sealed class SafeImagePathConverter : IValueConverter
 {
-    private static readonly ImageSource EmptyImageSource = new BitmapImage();
+    private static readonly ImageSource EmptyImageSource = CreateEmptyImageSource();
     private static readonly ConcurrentDictionary<string, ImageSource> ImageCache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsUsableImage(ImageSource? source)
+    {
+        try
+        {
+            return source is BitmapSource bitmap && bitmap.PixelWidth > 0 && bitmap.PixelHeight > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -36,7 +48,7 @@ public sealed class SafeImagePathConverter : IValueConverter
                 var bitmap = new BitmapImage();
                 bitmap.BeginInit();
                 bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache | BitmapCreateOptions.IgnoreColorProfile;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
                 if (decodeWidth > 0)
                 {
                     bitmap.DecodePixelWidth = decodeWidth;
@@ -45,7 +57,7 @@ public sealed class SafeImagePathConverter : IValueConverter
                 bitmap.StreamSource = stream;
                 bitmap.EndInit();
                 bitmap.Freeze();
-                if (ImageCache.Count > 800)
+                if (ImageCache.Count > 256)
                 {
                     ImageCache.Clear();
                 }
@@ -74,6 +86,13 @@ public sealed class SafeImagePathConverter : IValueConverter
             string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var width) && width > 0 => width,
             _ => 0
         };
+    }
+
+    private static ImageSource CreateEmptyImageSource()
+    {
+        var image = new BitmapImage();
+        image.Freeze();
+        return image;
     }
 
     private static long TryGetLastWriteTicks(string path)

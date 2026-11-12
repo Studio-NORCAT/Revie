@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Revie.App.ViewModels;
+using Revie.App.Views;
 
 namespace Revie.App;
 
@@ -32,8 +33,12 @@ public partial class MainWindow
     private double _panStartHorizontalOffset;
     private double _panStartVerticalOffset;
     private MainViewModel? _boundViewModel;
+    private CaptureListItemViewModel? _pendingNoteCapture;
+    private Task<bool>? _noteSaveInFlight;
+    private int _previewLoadRequestId;
 
     public bool AllowClose { get; set; }
+    public bool IsShowingSessions => SessionHost.Visibility == Visibility.Visible;
 
     public MainWindow()
     {
@@ -81,14 +86,36 @@ public partial class MainWindow
     public void ShowAndActivate()
     {
         Show();
-        WindowState = System.Windows.WindowState.Normal;
+        if (WindowState == System.Windows.WindowState.Minimized)
+        {
+            WindowState = System.Windows.WindowState.Normal;
+        }
         Activate();
+    }
+
+    public void ShowSessions(SessionBrowserView view)
+    {
+        if (_isPreviewFullscreen) SetPreviewFullscreen(false);
+        MainWindowRootGrid.Visibility = Visibility.Collapsed;
+        SessionHost.Content = view;
+        SessionHost.Visibility = Visibility.Visible;
+        ShowAndActivate();
+    }
+
+    public void ShowDashboard()
+    {
+        (SessionHost.Content as SessionBrowserView)?.DisposeView();
+        SessionHost.Content = null;
+        SessionHost.Visibility = Visibility.Collapsed;
+        MainWindowRootGrid.Visibility = Visibility.Visible;
+        _ = _boundViewModel?.RefreshAsync();
     }
 
     protected override void OnClosing(CancelEventArgs e)
     {
         if (!AllowClose)
         {
+            _ = FlushPendingNoteSaveAsync();
             e.Cancel = true;
             if (_isPreviewFullscreen)
             {
@@ -100,11 +127,14 @@ public partial class MainWindow
 
         _videoToolbarFadeTimer.Stop();
         _videoPositionTimer.Stop();
+        (SessionHost.Content as SessionBrowserView)?.DisposeView();
+        _ = FlushPendingNoteSaveAsync();
         base.OnClosing(e);
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
+        _ = FlushPendingNoteSaveAsync();
         if (_boundViewModel is not null)
         {
             _boundViewModel.PropertyChanged -= OnViewModelPropertyChanged;
@@ -121,7 +151,7 @@ public partial class MainWindow
     {
         if (e.PropertyName == nameof(MainViewModel.SelectedCapture))
         {
-            _noteSaveTimer.Stop();
+            _ = FlushPendingNoteSaveAsync();
             BeginPreviewLoadSequence();
         }
     }
@@ -293,13 +323,20 @@ public partial class MainWindow
 
     private async void NoteSaveTimerOnTick(object? sender, EventArgs e)
     {
-        _noteSaveTimer.Stop();
-        if (_boundViewModel is null || _boundViewModel.SelectedCapture is null)
-        {
-            return;
-        }
+        await FlushPendingNoteSaveAsync();
+    }
 
-        await _boundViewModel.PersistSelectedCaptureMetadataAsync();
+    public Task<bool> FlushPendingNoteSaveAsync()
+    {
+        _noteSaveTimer.Stop();
+        var pending = _pendingNoteCapture;
+        var viewModel = _boundViewModel;
+        _pendingNoteCapture = null;
+        if (pending is null || viewModel is null)
+            return _noteSaveInFlight ?? Task.FromResult(true);
+
+        _noteSaveInFlight = viewModel.PersistCaptureMetadataAsync(pending);
+        return _noteSaveInFlight;
     }
 
     private async void SaveNoteButton_OnClick(object sender, RoutedEventArgs e)
@@ -309,8 +346,17 @@ public partial class MainWindow
             return;
         }
 
-        var saved = await _boundViewModel.PersistSelectedCaptureMetadataAsync();
-        if (!saved)
+        Task<bool> saveTask;
+        if (ReferenceEquals(_pendingNoteCapture, _boundViewModel.SelectedCapture))
+        {
+            saveTask = FlushPendingNoteSaveAsync();
+        }
+        else
+        {
+            saveTask = _boundViewModel.PersistSelectedCaptureMetadataAsync();
+            _noteSaveInFlight = saveTask;
+        }
+        if (!await saveTask)
         {
             return;
         }
@@ -320,7 +366,7 @@ public partial class MainWindow
 
     private void NoteEditorTextBox_OnTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
-        if (_boundViewModel?.SelectedCapture is null)
+        if (_boundViewModel?.SelectedCapture is null || !NoteEditorTextBox.IsKeyboardFocusWithin)
         {
             return;
         }
@@ -328,6 +374,7 @@ public partial class MainWindow
         NoteSavedBadge.Visibility = Visibility.Collapsed;
         NoteSavedBadge.Opacity = 0;
         _noteSavedFeedbackTimer.Stop();
+        _pendingNoteCapture = _boundViewModel.SelectedCapture;
         _noteSaveTimer.Stop();
         _noteSaveTimer.Start();
     }
@@ -406,25 +453,41 @@ public partial class MainWindow
             return;
         }
 
-        if (_boundViewModel.SelectedCapture?.IsVideo == true)
+        var requestId = ++_previewLoadRequestId;
+        var selected = _boundViewModel.SelectedCapture;
+
+        if (selected?.IsVideo == true)
         {
             _boundViewModel.SetPreviewLoading(false);
-            ConfigureVideoPreview(_boundViewModel.SelectedCapture.VideoPath);
+            ConfigureVideoPreview(selected.VideoPath);
             return;
         }
 
         ClearVideoPreview();
         ResetVideoSeekSlider();
-        _boundViewModel.SetPreviewLoading(true);
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        _boundViewModel.SetPreviewLoading(selected is not null);
+        _ = LoadPreviewAsync(selected, requestId);
+    }
+
+    private async Task LoadPreviewAsync(CaptureListItemViewModel? selected, int requestId)
+    {
+        if (selected is not null)
         {
-            _ = _boundViewModel.SelectedCapture?.PreviewImage;
-            FitPreviewToViewport();
-            Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+            await selected.EnsurePreviewLoadedAsync();
+        }
+        if (requestId != _previewLoadRequestId || !ReferenceEquals(_boundViewModel?.SelectedCapture, selected)) return;
+        try
+        {
+            await Dispatcher.InvokeAsync(() =>
             {
-                _boundViewModel.SetPreviewLoading(false);
-            }));
-        }));
+                FitPreviewToViewport();
+                _boundViewModel?.SetPreviewLoading(false);
+            }, DispatcherPriority.Render);
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or InvalidOperationException)
+        {
+            // The window is closing.
+        }
     }
 
     private void FitPreviewToViewport()

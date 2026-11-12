@@ -84,6 +84,7 @@ public sealed class CaptureService
         var imagePath = Path.Combine(captureDirectory, "capture.png");
         var jsonPath = Path.Combine(captureDirectory, "capture.json");
         SaveBitmap(bitmap, imagePath);
+        var thumbnailPath = SidebarThumbnailService.EnsureThumbnail(imagePath, captureDirectory);
 
         var activeWindow = TryGetActiveWindowInfo();
         var metadata = new CaptureMetadata
@@ -101,7 +102,7 @@ public sealed class CaptureService
             CaptureDirectory = captureDirectory,
             ImagePath = imagePath,
             VideoPath = string.Empty,
-            ThumbnailPath = imagePath,
+            ThumbnailPath = thumbnailPath,
             DurationSeconds = 0,
             HasMicrophoneAudio = false,
             JsonPath = jsonPath,

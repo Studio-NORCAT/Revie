@@ -4,10 +4,12 @@ namespace Revie.App.Views;
 
 public partial class SessionNameWindow : Window
 {
-    public SessionNameWindow(string defaultName)
+    public SessionNameWindow(string defaultName, string sessionsRoot)
     {
         InitializeComponent();
         SessionNameTextBox.Text = defaultName;
+        DestinationTextBlock.Text = $"Save under: {sessionsRoot}";
+        DestinationTextBlock.ToolTip = sessionsRoot;
         SessionNameTextBox.SelectAll();
         Loaded += (_, _) => SessionNameTextBox.Focus();
     }

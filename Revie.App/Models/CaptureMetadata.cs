@@ -33,6 +33,9 @@ public sealed class CaptureMetadata
     public string Note { get; set; } = string.Empty;
     public string SourceJsonPath { get; set; } = string.Empty;
     public List<string> UploadedImagePaths { get; set; } = new();
+    public string RevisionReviewRequestedForUser { get; set; } = string.Empty;
+    public DateTime RevisionReviewRequestedUtc { get; set; }
+    public DateTime RevisionReviewCompletedUtc { get; set; }
     public List<MonitorSnapshot> Monitors { get; set; } = new();
 
     [JsonExtensionData]
